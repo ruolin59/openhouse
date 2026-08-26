@@ -1,6 +1,7 @@
 package com.linkedin.openhouse.housetables.repository.impl.jdbc;
 
 import com.linkedin.openhouse.housetables.config.db.jdbc.JdbcProviderConfiguration;
+import com.linkedin.openhouse.housetables.model.EntityType;
 import com.linkedin.openhouse.housetables.model.UserTableRow;
 import com.linkedin.openhouse.housetables.model.UserTableRowPrimaryKey;
 import com.linkedin.openhouse.housetables.repository.HtsRepository;
@@ -37,8 +38,6 @@ public interface UserTableHtsJdbcRepository
 
   boolean existsByDatabaseIdIgnoreCaseAndTableIdIgnoreCase(String databaseId, String tableId);
 
-  void deleteByDatabaseIdIgnoreCaseAndTableIdIgnoreCase(String databaseId, String tableId);
-
   String COMMON_FILTER_CLAUSES =
       "(:databaseId IS NULL OR lower(u.databaseId) = lower(:databaseId)) AND "
           + "(:tableId IS NULL OR lower(u.tableId) = lower(:tableId)) AND "
@@ -47,18 +46,31 @@ public interface UserTableHtsJdbcRepository
           + "(:storageType IS NULL OR u.storageType = :storageType) AND "
           + "(:creationTime IS NULL OR u.creationTime = :creationTime)";
 
-  String TABLE_ROW_PREDICATE = "(u.entityType IS NULL OR upper(u.entityType) = 'TABLE')";
+  String TABLE = "TABLE";
+
+  String VIEW = "VIEW";
+
+  /**
+   * The null arm is load bearing: a legacy row predates the discriminator and is definitively a
+   * table, so without it every pre-existing table becomes invisible. Do not reduce it to a plain
+   * equality before a verified backfill and a {@code NOT NULL} migration.
+   *
+   * <p>Collation assumption, shared with {@link #VIEW_ROW_PREDICATE}: this comparison assumes the
+   * column's collation matches these values exactly, folding neither accents nor trailing spaces,
+   * so that SQL agrees with {@link EntityType#fromName} about what counts as a table. An accent
+   * insensitive collation would let a stored {@code 'TÁBLE'} match here yet fail hydration, and a
+   * PAD SPACE collation would do the same for {@code 'TABLE '}. Unconfirmed against production;
+   * please confirm the deployed collation.
+   */
+  String TABLE_ROW_PREDICATE = "(u.entityType IS NULL OR upper(u.entityType) = '" + TABLE + "')";
+
+  String VIEW_ROW_PREDICATE = "upper(u.entityType) = '" + VIEW + "'";
 
   String PATTERN_KEY_CLAUSES =
       "lower(u.databaseId) = lower(:databaseId) AND "
           + "lower(u.tableId) LIKE lower(:tableIdPattern)";
 
-  /**
-   * Table-scoped point read serving {@code getUserTable}, the single HTS endpoint behind every
-   * table point read in the tables service. The neutral {@link
-   * #findByDatabaseIdIgnoreCaseAndTableIdIgnoreCase} above stays unfiltered because the writers
-   * must see a row of any type to detect a collision at a shared key.
-   */
+  /** The neutral finder above stays unfiltered so writers can spot a collision at a shared key. */
   @Query(
       "SELECT u FROM UserTableRow u WHERE "
           + "lower(u.databaseId) = lower(:databaseId) AND "
@@ -154,6 +166,88 @@ public interface UserTableHtsJdbcRepository
       @Param("storageType") String storageType,
       @Param("creationTime") Long creationTime);
 
+  @Query(
+      "SELECT u FROM UserTableRow u WHERE "
+          + "lower(u.databaseId) = lower(:databaseId) AND "
+          + "lower(u.tableId) = lower(:tableId) AND "
+          + VIEW_ROW_PREDICATE)
+  Optional<UserTableRow> findViewByDatabaseIdIgnoreCaseAndTableIdIgnoreCase(
+      @Param("databaseId") String databaseId, @Param("tableId") String tableId);
+
+  @Query(
+      "select DISTINCT u from UserTableRow u where "
+          + COMMON_FILTER_CLAUSES
+          + " AND "
+          + VIEW_ROW_PREDICATE)
+  Iterable<UserTableRow> findAllViewsByFilters(
+      @Param("databaseId") String databaseId,
+      @Param("tableId") String tableId,
+      @Param("tableVersion") String tableVersion,
+      @Param("metadataLocation") String metadataLocation,
+      @Param("storageType") String storageType,
+      @Param("creationTime") Long creationTime);
+
+  @Query(
+      value =
+          "select DISTINCT u from UserTableRow u where "
+              + COMMON_FILTER_CLAUSES
+              + " AND "
+              + VIEW_ROW_PREDICATE,
+      countQuery =
+          "select COUNT(DISTINCT u) from UserTableRow u where "
+              + COMMON_FILTER_CLAUSES
+              + " AND "
+              + VIEW_ROW_PREDICATE)
+  Page<UserTableRow> findAllViewsByFilters(
+      @Param("databaseId") String databaseId,
+      @Param("tableId") String tableId,
+      @Param("tableVersion") String tableVersion,
+      @Param("metadataLocation") String metadataLocation,
+      @Param("storageType") String storageType,
+      @Param("creationTime") Long creationTime,
+      Pageable pageable);
+
+  @Query("SELECT u FROM UserTableRow u WHERE " + PATTERN_KEY_CLAUSES + " AND " + VIEW_ROW_PREDICATE)
+  Iterable<UserTableRow> findAllViewsByDatabaseIdAndTableIdLikeAllIgnoreCase(
+      @Param("databaseId") String databaseId, @Param("tableIdPattern") String tableIdPattern);
+
+  @Query(
+      value =
+          "SELECT u FROM UserTableRow u WHERE "
+              + PATTERN_KEY_CLAUSES
+              + " AND "
+              + VIEW_ROW_PREDICATE,
+      countQuery =
+          "SELECT COUNT(u) FROM UserTableRow u WHERE "
+              + PATTERN_KEY_CLAUSES
+              + " AND "
+              + VIEW_ROW_PREDICATE)
+  Page<UserTableRow> findAllViewsByDatabaseIdAndTableIdLikeAllIgnoreCase(
+      @Param("databaseId") String databaseId,
+      @Param("tableIdPattern") String tableIdPattern,
+      Pageable pageable);
+
+  /** Bulk statements bypass the persistence context, hence the flush and clear. */
+  @Transactional
+  @Modifying(flushAutomatically = true, clearAutomatically = true)
+  @Query(
+      "DELETE FROM UserTableRow u WHERE "
+          + "lower(u.databaseId) = lower(:databaseId) AND "
+          + "lower(u.tableId) = lower(:tableId) AND "
+          + TABLE_ROW_PREDICATE)
+  int deleteTableByDatabaseIdIgnoreCaseAndTableIdIgnoreCase(
+      @Param("databaseId") String databaseId, @Param("tableId") String tableId);
+
+  @Transactional
+  @Modifying(flushAutomatically = true, clearAutomatically = true)
+  @Query(
+      "DELETE FROM UserTableRow u WHERE "
+          + "lower(u.databaseId) = lower(:databaseId) AND "
+          + "lower(u.tableId) = lower(:tableId) AND "
+          + VIEW_ROW_PREDICATE)
+  int deleteViewByDatabaseIdIgnoreCaseAndTableIdIgnoreCase(
+      @Param("databaseId") String databaseId, @Param("tableId") String tableId);
+
   /*
    * The following methods are required to maintain the generality of the interface {@link com.linkedin.openhouse.housetables.repository.HtsRepository}
    */
@@ -170,18 +264,62 @@ public interface UserTableHtsJdbcRepository
         userTableRowPrimaryKey.getDatabaseId(), userTableRowPrimaryKey.getTableId());
   }
 
-  @Override
-  default void deleteById(UserTableRowPrimaryKey userTableRowPrimaryKey) {
-    deleteByDatabaseIdIgnoreCaseAndTableIdIgnoreCase(
-        userTableRowPrimaryKey.getDatabaseId(), userTableRowPrimaryKey.getTableId());
+  /**
+   * Deletes only a NULL or TABLE row, leaving a VIEW at the same key untouched, and returns the
+   * affected-row count so the service maps missing and wrong-type alike to 404. Deliberately not a
+   * neutral delete: the soft-deleted store has no discriminator and must never receive a view.
+   */
+  default int deleteTableById(UserTableRowPrimaryKey key) {
+    return deleteTableByDatabaseIdIgnoreCaseAndTableIdIgnoreCase(
+        key.getDatabaseId(), key.getTableId());
   }
 
+  /** The mirror of {@link #deleteTableById}: only a VIEW row, never a TABLE or legacy NULL. */
+  default int deleteViewById(UserTableRowPrimaryKey key) {
+    return deleteViewByDatabaseIdIgnoreCaseAndTableIdIgnoreCase(
+        key.getDatabaseId(), key.getTableId());
+  }
+
+  /**
+   * The key-addressed generic deletes are sealed because a wrong-type delete is irreversible.
+   * No-arg {@code deleteAll()} stays available: it addresses no key, and test teardown depends on
+   * it.
+   */
+  @Override
+  default void deleteById(UserTableRowPrimaryKey key) {
+    throw new UnsupportedOperationException("Use deleteTableById or deleteViewById");
+  }
+
+  @Override
+  default void delete(UserTableRow entity) {
+    throw new UnsupportedOperationException("Use deleteTableById or deleteViewById");
+  }
+
+  @Override
+  default void deleteAllById(Iterable<? extends UserTableRowPrimaryKey> keys) {
+    throw new UnsupportedOperationException("Use typed single-entity deletion");
+  }
+
+  @Override
+  default void deleteAll(Iterable<? extends UserTableRow> entities) {
+    throw new UnsupportedOperationException("Use typed single-entity deletion");
+  }
+
+  String STAMP_TABLE_TYPE = "u.entityType = '" + TABLE + "' ";
+
+  /** Table-only: views are not renameable, so there is deliberately no {@code renameViewId}. */
   @Transactional
-  @Modifying
+  @Modifying(flushAutomatically = true, clearAutomatically = true)
   @Query(
-      "UPDATE UserTableRow table SET table.tableId = :toTableId, table.metadataLocation = :metadataLocation, table.databaseId = :toDatabaseId "
-          + "WHERE lower(table.databaseId) = lower(:fromDatabaseId) AND lower(table.tableId) = lower(:fromTableId)")
-  void renameTableId(
+      "UPDATE UserTableRow u SET "
+          + "u.tableId = :toTableId, "
+          + "u.metadataLocation = :metadataLocation, "
+          + "u.databaseId = :toDatabaseId, "
+          + STAMP_TABLE_TYPE
+          + "WHERE lower(u.databaseId) = lower(:fromDatabaseId) "
+          + "AND lower(u.tableId) = lower(:fromTableId) AND "
+          + TABLE_ROW_PREDICATE)
+  int renameTableId(
       @Param("fromDatabaseId") String fromDatabaseId,
       @Param("fromTableId") String fromTableId,
       @Param("toDatabaseId") String toDatabaseId,

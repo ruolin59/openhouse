@@ -28,6 +28,7 @@ import org.mapstruct.Mapping;
  */
 @Mapper(
     componentModel = "spring",
+    imports = {EntityType.class},
     uses = {UserTableVersionMapper.class})
 public interface UserTablesMapper {
 
@@ -105,14 +106,15 @@ public interface UserTablesMapper {
   /** Map a {@link UserTableIcebergRow} to a {@link UserTableRow} */
   UserTableRow toUserTableRow(UserTableIcebergRow userTableIcebergRow);
 
-  /** Map a {@link SoftDeletedUserTableRow} to a {@link UserTableRow} */
+  /** Restores as TABLE: the soft-deleted store has no discriminator, and views never enter it. */
+  @Mapping(target = "entityType", expression = "java(EntityType.TABLE)")
   UserTableRow toUserTableRow(SoftDeletedUserTableRow softDeletedUserTableRow);
 
   /**
    * The single {@code String -> EntityType} hop, picked up implicitly wherever the transport model
-   * meets an HTS-internal one. Bean Validation on {@link UserTable} rejects an unrecognized
-   * spelling before any mapping runs; this keeps a caller that bypasses it on the client-error path
-   * instead of letting {@link Enum#valueOf} escape as a server error.
+   * meets an HTS-internal one. Both an unrecognized spelling and a null are client errors here: the
+   * endpoint stamps the type at ingress, so either means the caller bypassed a boundary rather than
+   * that a server fault occurred.
    */
   default EntityType toEntityType(String entityType) {
     try {

@@ -5,6 +5,7 @@ import static com.linkedin.openhouse.common.utils.PageableUtil.createPageable;
 import com.linkedin.openhouse.cluster.metrics.micrometer.MetricsReporter;
 import com.linkedin.openhouse.common.exception.AlreadyExistsException;
 import com.linkedin.openhouse.common.exception.EntityConcurrentModificationException;
+import com.linkedin.openhouse.common.exception.NoSuchEntityException;
 import com.linkedin.openhouse.common.exception.NoSuchSoftDeletedUserTableException;
 import com.linkedin.openhouse.common.exception.NoSuchUserTableException;
 import com.linkedin.openhouse.common.metrics.MetricsConstant;
@@ -12,6 +13,7 @@ import com.linkedin.openhouse.housetables.api.spec.model.UserTable;
 import com.linkedin.openhouse.housetables.dto.mapper.SoftDeletedUserTablesMapper;
 import com.linkedin.openhouse.housetables.dto.mapper.UserTablesMapper;
 import com.linkedin.openhouse.housetables.dto.model.UserTableDto;
+import com.linkedin.openhouse.housetables.model.EntityType;
 import com.linkedin.openhouse.housetables.model.SoftDeletedUserTableRow;
 import com.linkedin.openhouse.housetables.model.SoftDeletedUserTableRowPrimaryKey;
 import com.linkedin.openhouse.housetables.model.UserTableRow;
@@ -67,6 +69,24 @@ public class UserTablesServiceImpl implements UserTablesService {
   }
 
   @Override
+  public UserTableDto getNeutralEntity(String databaseId, String tableId) {
+    // Only an empty Optional is absence; repository and hydration failures must escape, because
+    // reporting a broken row as "free" is how an occupant gets overwritten.
+    return htsJdbcRepository
+        .findByDatabaseIdIgnoreCaseAndTableIdIgnoreCase(databaseId, tableId)
+        .map(userTablesMapper::toUserTableDto)
+        .orElseThrow(() -> new NoSuchEntityException("Entity", databaseId + "." + tableId));
+  }
+
+  @Override
+  public UserTableDto getUserView(String databaseId, String tableId) {
+    return htsJdbcRepository
+        .findViewByDatabaseIdIgnoreCaseAndTableIdIgnoreCase(databaseId, tableId)
+        .map(userTablesMapper::toUserTableDto)
+        .orElseThrow(() -> new NoSuchEntityException("View", databaseId + "." + tableId));
+  }
+
+  @Override
   public List<UserTableDto> getAllUserTables(UserTable userTable) {
     if (isListDatabases(userTable)) {
       return listDatabases();
@@ -94,6 +114,28 @@ public class UserTablesServiceImpl implements UserTablesService {
   }
 
   @Override
+  public List<UserTableDto> getAllUserViews(UserTable userView) {
+    if (isListViews(userView)) {
+      return listViews(userView);
+    } else if (isListViewsWithPattern(userView)) {
+      return listViewsWithPattern(userView);
+    } else {
+      return searchViews(userView);
+    }
+  }
+
+  @Override
+  public Page<UserTableDto> getAllUserViews(UserTable userView, int page, int size, String sortBy) {
+    if (isListViews(userView)) {
+      return listViews(userView, page, size, sortBy);
+    } else if (isListViewsWithPattern(userView)) {
+      return listViewsWithPattern(userView, page, size, sortBy);
+    } else {
+      return searchViews(userView, page, size, sortBy);
+    }
+  }
+
+  @Override
   public Pair<UserTableDto, Boolean> putUserTable(UserTable userTable) {
     Optional<UserTableRow> existingUserTableRow =
         htsJdbcRepository.findById(
@@ -101,6 +143,15 @@ public class UserTablesServiceImpl implements UserTablesService {
                 .databaseId(userTable.getDatabaseId())
                 .tableId(userTable.getTableId())
                 .build());
+
+    // Compared before any version mapping runs: a wrong-type collision is not a stale write.
+    EntityType requestedEntityType = userTablesMapper.toEntityType(userTable.getEntityType());
+    if (existingUserTableRow.isPresent()
+        && existingUserTableRow.get().getEntityType() != requestedEntityType) {
+      throw new AlreadyExistsException(
+          existingUserTableRow.get().getEntityType().name(),
+          userTable.getDatabaseId() + "." + userTable.getTableId());
+    }
 
     UserTableRow targetUserTableRow =
         userTablesMapper.toUserTableRow(userTable, existingUserTableRow);
@@ -143,11 +194,7 @@ public class UserTablesServiceImpl implements UserTablesService {
       String toDatabaseId,
       String toTableId,
       String metadataLocation) {
-    if (!htsJdbcRepository.existsById(
-        UserTableRowPrimaryKey.builder().databaseId(fromDatabaseId).tableId(fromTableId).build())) {
-      throw new NoSuchUserTableException(fromDatabaseId, fromTableId);
-    }
-    // Renames user table within the same database
+    // No source precheck: the conditional update is the check, which closes the TOCTOU window.
     try {
       log.info(
           "Renaming user table from {}.{} to {}.{}",
@@ -158,8 +205,11 @@ public class UserTablesServiceImpl implements UserTablesService {
       // Use fromDatabaseId for destination db to preserve the original case of the database
       // TODO: Use toDataBaseId for destination instead of fromDatabaseId once rename across
       // databases is supported
-      htsJdbcRepository.renameTableId(
-          fromDatabaseId, fromTableId, fromDatabaseId, toTableId, metadataLocation);
+      if (htsJdbcRepository.renameTableId(
+              fromDatabaseId, fromTableId, fromDatabaseId, toTableId, metadataLocation)
+          == 0) {
+        throw new NoSuchUserTableException(fromDatabaseId, fromTableId);
+      }
     } catch (DataIntegrityViolationException e) {
       throw new AlreadyExistsException("Table", toTableId);
     }
@@ -168,17 +218,30 @@ public class UserTablesServiceImpl implements UserTablesService {
   @Override
   @Transactional
   public void deleteUserTable(String databaseId, String tableId, boolean isSoftDeleted) {
-    UserTableRow existingTable =
-        htsJdbcRepository
-            .findById(
-                UserTableRowPrimaryKey.builder().databaseId(databaseId).tableId(tableId).build())
-            .orElseThrow(() -> new NoSuchUserTableException(databaseId, tableId));
+    UserTableRowPrimaryKey key =
+        UserTableRowPrimaryKey.builder().databaseId(databaseId).tableId(tableId).build();
     if (isSoftDeleted) {
+      UserTableRow existingTable =
+          htsJdbcRepository
+              .findTableByDatabaseIdIgnoreCaseAndTableIdIgnoreCase(databaseId, tableId)
+              .orElseThrow(() -> new NoSuchUserTableException(databaseId, tableId));
       softDeletedHtsJdbcRepository.save(
           softDeletedUserTablesMapper.toSoftDeletedUserTableRow(existingTable));
     }
-    htsJdbcRepository.deleteById(
-        UserTableRowPrimaryKey.builder().databaseId(databaseId).tableId(tableId).build());
+    // Throwing inside the transaction rolls the copy above back, so a row that loses the race is
+    // not left behind in the soft-deleted store.
+    if (htsJdbcRepository.deleteTableById(key) == 0) {
+      throw new NoSuchUserTableException(databaseId, tableId);
+    }
+  }
+
+  @Override
+  public void deleteUserView(String databaseId, String tableId) {
+    if (htsJdbcRepository.deleteViewById(
+            UserTableRowPrimaryKey.builder().databaseId(databaseId).tableId(tableId).build())
+        == 0) {
+      throw new NoSuchEntityException("View", databaseId + "." + tableId);
+    }
   }
 
   /**
@@ -378,6 +441,101 @@ public class UserTablesServiceImpl implements UserTablesService {
         MetricsConstant.HTS_SEARCH_TABLES_TIME);
   }
 
+  private List<UserTableDto> listViews(UserTable userView) {
+    METRICS_REPORTER.count(MetricsConstant.HTS_LIST_VIEWS_REQUEST);
+    return METRICS_REPORTER.executeWithStats(
+        () ->
+            StreamSupport.stream(
+                    htsJdbcRepository
+                        .findAllViewsByFilters(
+                            userView.getDatabaseId(), null, null, null, null, null)
+                        .spliterator(),
+                    false)
+                .map(userTableRow -> userTablesMapper.toUserTableDto(userTableRow))
+                .collect(Collectors.toList()),
+        MetricsConstant.HTS_LIST_VIEWS_TIME);
+  }
+
+  private Page<UserTableDto> listViews(UserTable userView, int page, int size, String sortBy) {
+    METRICS_REPORTER.count(MetricsConstant.HTS_PAGE_VIEWS_REQUEST);
+    Pageable pageable = createPageable(page, size, sortBy, "tableId");
+    return METRICS_REPORTER.executeWithStats(
+        () ->
+            htsJdbcRepository
+                .findAllViewsByFilters(
+                    userView.getDatabaseId(), null, null, null, null, null, pageable)
+                .map(userTableRow -> userTablesMapper.toUserTableDto(userTableRow)),
+        MetricsConstant.HTS_PAGE_VIEWS_TIME);
+  }
+
+  private List<UserTableDto> listViewsWithPattern(UserTable userView) {
+    METRICS_REPORTER.count(MetricsConstant.HTS_LIST_VIEWS_REQUEST);
+    return METRICS_REPORTER.executeWithStats(
+        () ->
+            StreamSupport.stream(
+                    htsJdbcRepository
+                        .findAllViewsByDatabaseIdAndTableIdLikeAllIgnoreCase(
+                            userView.getDatabaseId(), userView.getTableId())
+                        .spliterator(),
+                    false)
+                .map(userTableRow -> userTablesMapper.toUserTableDto(userTableRow))
+                .collect(Collectors.toList()),
+        MetricsConstant.HTS_LIST_VIEWS_TIME);
+  }
+
+  private Page<UserTableDto> listViewsWithPattern(
+      UserTable userView, int page, int size, String sortBy) {
+    METRICS_REPORTER.count(MetricsConstant.HTS_PAGE_VIEWS_REQUEST);
+    Pageable pageable = createPageable(page, size, sortBy, "tableId");
+    return METRICS_REPORTER.executeWithStats(
+        () ->
+            htsJdbcRepository
+                .findAllViewsByDatabaseIdAndTableIdLikeAllIgnoreCase(
+                    userView.getDatabaseId(), userView.getTableId(), pageable)
+                .map(userTableRow -> userTablesMapper.toUserTableDto(userTableRow)),
+        MetricsConstant.HTS_PAGE_VIEWS_TIME);
+  }
+
+  private List<UserTableDto> searchViews(UserTable userView) {
+    METRICS_REPORTER.count(MetricsConstant.HTS_GENERAL_SEARCH_VIEWS_REQUEST);
+    log.warn("Reaching general search for user view which is not expected: {}", userView.toJson());
+    return METRICS_REPORTER.executeWithStats(
+        () ->
+            StreamSupport.stream(
+                    htsJdbcRepository
+                        .findAllViewsByFilters(
+                            userView.getDatabaseId(),
+                            userView.getTableId(),
+                            userView.getTableVersion(),
+                            userView.getMetadataLocation(),
+                            userView.getStorageType(),
+                            userView.getCreationTime())
+                        .spliterator(),
+                    false)
+                .map(userTableRow -> userTablesMapper.toUserTableDto(userTableRow))
+                .collect(Collectors.toList()),
+        MetricsConstant.HTS_SEARCH_VIEWS_TIME);
+  }
+
+  private Page<UserTableDto> searchViews(UserTable userView, int page, int size, String sortBy) {
+    METRICS_REPORTER.count(MetricsConstant.HTS_PAGE_SEARCH_VIEWS_REQUEST);
+    Pageable pageable = createPageable(page, size, sortBy, "tableId");
+    log.warn("Reaching general search for user view which is not expected: {}", userView.toJson());
+    return METRICS_REPORTER.executeWithStats(
+        () ->
+            htsJdbcRepository
+                .findAllViewsByFilters(
+                    userView.getDatabaseId(),
+                    userView.getTableId(),
+                    userView.getTableVersion(),
+                    userView.getMetadataLocation(),
+                    userView.getStorageType(),
+                    userView.getCreationTime(),
+                    pageable)
+                .map(userTableRow -> userTablesMapper.toUserTableDto(userTableRow)),
+        MetricsConstant.HTS_PAGE_SEARCH_VIEWS_TIME);
+  }
+
   private boolean isListDatabases(UserTable userTable) {
     return isNonKeyFieldsNullForUserTable(userTable)
         && userTable.getDatabaseId() == null
@@ -394,6 +552,17 @@ public class UserTablesServiceImpl implements UserTablesService {
     return isNonKeyFieldsNullForUserTable(userTable)
         && userTable.getDatabaseId() != null
         && userTable.getTableId() != null;
+  }
+
+  /** Also covers the empty filter: an empty view query lists views, not database names. */
+  private boolean isListViews(UserTable userView) {
+    return isNonKeyFieldsNullForUserTable(userView) && userView.getTableId() == null;
+  }
+
+  private boolean isListViewsWithPattern(UserTable userView) {
+    return isNonKeyFieldsNullForUserTable(userView)
+        && userView.getDatabaseId() != null
+        && userView.getTableId() != null;
   }
 
   private boolean isNonKeyFieldsNullForUserTable(UserTable userTable) {

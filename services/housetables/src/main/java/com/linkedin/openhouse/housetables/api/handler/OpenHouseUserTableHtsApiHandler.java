@@ -40,6 +40,73 @@ public class OpenHouseUserTableHtsApiHandler implements UserTableHtsApiHandler {
   }
 
   @Override
+  public ApiResponse<EntityResponseBody<UserTable>> getNeutralEntity(UserTableKey userTableKey) {
+    userTablesHtsApiValidator.validateGetEntity(userTableKey);
+    return ApiResponse.<EntityResponseBody<UserTable>>builder()
+        .httpStatus(HttpStatus.OK)
+        .responseBody(
+            EntityResponseBody.<UserTable>builder()
+                .entity(
+                    userTablesMapper.toUserTable(
+                        userTableService.getNeutralEntity(
+                            userTableKey.getDatabaseId(), userTableKey.getTableId())))
+                .build())
+        .build();
+  }
+
+  @Override
+  public ApiResponse<EntityResponseBody<UserTable>> getViewEntity(UserTableKey key) {
+    userTablesHtsApiValidator.validateGetEntity(key);
+    return ApiResponse.<EntityResponseBody<UserTable>>builder()
+        .httpStatus(HttpStatus.OK)
+        .responseBody(
+            EntityResponseBody.<UserTable>builder()
+                .entity(
+                    userTablesMapper.toUserTable(
+                        userTableService.getUserView(key.getDatabaseId(), key.getTableId())))
+                .build())
+        .build();
+  }
+
+  @Override
+  public ApiResponse<GetAllEntityResponseBody<UserTable>> getViewEntities(UserTable userView) {
+    userTablesHtsApiValidator.validateGetEntities(userView);
+    return ApiResponse.<GetAllEntityResponseBody<UserTable>>builder()
+        .httpStatus(HttpStatus.OK)
+        .responseBody(
+            GetAllEntityResponseBody.<UserTable>builder()
+                .results(
+                    userTableService.getAllUserViews(userView).stream()
+                        .map(userTableDto -> userTablesMapper.toUserTable(userTableDto))
+                        .collect(Collectors.toList()))
+                .build())
+        .build();
+  }
+
+  @Override
+  public ApiResponse<GetAllEntityResponseBody<UserTable>> getViewEntities(
+      UserTable userView, int page, int size, String sortBy) {
+    userTablesHtsApiValidator.validateGetEntities(userView, page, size, sortBy);
+    return ApiResponse.<GetAllEntityResponseBody<UserTable>>builder()
+        .httpStatus(HttpStatus.OK)
+        .responseBody(
+            GetAllEntityResponseBody.<UserTable>builder()
+                .pageResults(
+                    userTableService
+                        .getAllUserViews(userView, page, size, sortBy)
+                        .map(userTableDto -> userTablesMapper.toUserTable(userTableDto)))
+                .build())
+        .build();
+  }
+
+  @Override
+  public ApiResponse<Void> deleteView(UserTableKey key) {
+    userTablesHtsApiValidator.validateDeleteEntity(key);
+    userTableService.deleteUserView(key.getDatabaseId(), key.getTableId());
+    return ApiResponse.<Void>builder().httpStatus(HttpStatus.NO_CONTENT).build();
+  }
+
+  @Override
   public ApiResponse<GetAllEntityResponseBody<UserTable>> getEntities(UserTable userTable) {
     userTablesHtsApiValidator.validateGetEntities(userTable);
     return ApiResponse.<GetAllEntityResponseBody<UserTable>>builder()
@@ -88,6 +155,16 @@ public class OpenHouseUserTableHtsApiHandler implements UserTableHtsApiHandler {
 
   @Override
   public ApiResponse<EntityResponseBody<UserTable>> putEntity(UserTable userTable) {
+    return put(userTable);
+  }
+
+  @Override
+  public ApiResponse<EntityResponseBody<UserTable>> putView(UserTable userView) {
+    return put(userView);
+  }
+
+  /** Both typed writes share one primitive: the controller has already stamped the type. */
+  private ApiResponse<EntityResponseBody<UserTable>> put(UserTable userTable) {
     userTablesHtsApiValidator.validatePutEntity(userTable);
     Pair<UserTableDto, Boolean> putResult = userTableService.putUserTable(userTable);
     HttpStatus statusCode = putResult.getSecond() ? HttpStatus.OK : HttpStatus.CREATED;

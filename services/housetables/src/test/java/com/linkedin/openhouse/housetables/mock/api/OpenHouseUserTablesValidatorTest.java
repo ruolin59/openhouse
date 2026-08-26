@@ -192,4 +192,58 @@ public class OpenHouseUserTablesValidatorTest {
         RequestValidationFailureException.class,
         () -> userTablesHtsApiValidator.validatePutEntity(garbage));
   }
+
+  /**
+   * Transport nullability is load-bearing for rolling deploys: an un-upgraded client sends no
+   * discriminator, and validation must not be what rejects it — the controller has already resolved
+   * it by then.
+   *
+   * <p>Regression guard: the wire field must stay nullable even though the mapper rejects null.
+   */
+  @Test
+  public void validatePutEntityAcceptsATransportNullBeforeNormalization() {
+    UserTable untyped =
+        UserTable.builder()
+            .tableId("tb1")
+            .databaseId("db1")
+            .tableVersion("/tmp/test/opt/metadata.json")
+            .metadataLocation("INITIAL_VERSION")
+            .entityType(null)
+            .build();
+
+    assertDoesNotThrow(() -> userTablesHtsApiValidator.validatePutEntity(untyped));
+
+    // And the normalized form the controller hands on is equally valid, for both routes.
+    assertDoesNotThrow(
+        () ->
+            userTablesHtsApiValidator.validatePutEntity(
+                untyped.toBuilder().entityType("TABLE").build()));
+    assertDoesNotThrow(
+        () ->
+            userTablesHtsApiValidator.validatePutEntity(
+                untyped.toBuilder().entityType("VIEW").build()));
+  }
+
+  /**
+   * Type-scoped by path, so an {@code entityType} filter is ignored rather than rejected. Rejecting
+   * it would be a separate, deliberate choice.
+   *
+   * <p>Regression guard: the validator deliberately has no opinion on {@code entityType}.
+   */
+  @Test
+  public void validateGetEntitiesToleratesAndIgnoresEntityType() {
+    for (String entityType : new String[] {"VIEW", "view", "TABLE", "TaBlE", null}) {
+      UserTable byDatabase = UserTable.builder().databaseId("db1").entityType(entityType).build();
+      assertDoesNotThrow(
+          () -> userTablesHtsApiValidator.validateGetEntities(byDatabase),
+          "query with entityType=" + entityType + " should validate");
+      assertDoesNotThrow(
+          () -> userTablesHtsApiValidator.validateGetEntities(byDatabase, 0, 50, "tableId"));
+    }
+
+    // Even an unrecognized value is inert here: it is never a filter, so it is never validated.
+    UserTable garbageFilter =
+        UserTable.builder().databaseId("db1").tableId("tb%").entityType("UNKNOWN").build();
+    assertDoesNotThrow(() -> userTablesHtsApiValidator.validateGetEntities(garbageFilter));
+  }
 }

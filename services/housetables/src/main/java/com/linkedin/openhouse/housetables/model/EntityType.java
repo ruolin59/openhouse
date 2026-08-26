@@ -14,13 +14,15 @@ public enum EntityType {
   VIEW;
 
   /**
-   * Resolves the spellings the transport model accepts, which is case-insensitive, so a value that
-   * passes validation can never fail to resolve here.
-   *
-   * @return null for a null input
-   * @throws IllegalArgumentException if the value is not a recognized entity type
+   * Matches a constant name case-insensitively; anything else is corrupt, including an accented or
+   * padded spelling. Null is rejected rather than defaulted, because it means "legacy row, hence a
+   * table" from the column but "unstated" from the wire, and only {@link EntityTypeConverter} knows
+   * which one it is reading.
    */
   public static EntityType fromName(String name) {
-    return name == null ? null : valueOf(name.toUpperCase(Locale.ROOT));
+    if (name == null) {
+      throw new IllegalArgumentException("entityType cannot be null");
+    }
+    return valueOf(name.toUpperCase(Locale.ROOT));
   }
 }

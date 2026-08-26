@@ -17,6 +17,15 @@ public interface UserTablesService {
   UserTableDto getUserTable(String databaseId, String tableId);
 
   /**
+   * Reads the occupant of a key whatever its type, for collision detection. Absence must mean
+   * genuine absence, so repository and hydration failures propagate rather than reading as free.
+   */
+  UserTableDto getNeutralEntity(String databaseId, String tableId);
+
+  /** View-scoped point read; a table or legacy null at the key resolves as absent. */
+  UserTableDto getUserView(String databaseId, String tableId);
+
+  /**
    * Given a partially filled {@link UserTable} object, prepare list of {@link UserTableDto}s that
    * matches with the provided {@link UserTable}. See
    * com.linkedin.openhouse.housetables.dto.model.UserTableDto#match for the definition of match.
@@ -40,8 +49,25 @@ public interface UserTablesService {
    */
   Page<UserTableDto> getAllUserTables(UserTable userTable, int page, int size, String sortBy);
 
-  /** Given a databaseId and tableId, delete the user table entry from the House Table. */
+  /**
+   * Unlike {@link #getAllUserTables(UserTable)}, an empty filter returns every view rather than a
+   * projection of database names; database enumeration stays type-agnostic on the table query.
+   */
+  List<UserTableDto> getAllUserViews(UserTable userView);
+
+  Page<UserTableDto> getAllUserViews(UserTable userView, int page, int size, String sortBy);
+
+  /**
+   * Given a databaseId and tableId, delete the user table entry from the House Table. The {@code
+   * isSoftDelete} flag is table-only; {@link #deleteUserView} has no equivalent by design.
+   */
   void deleteUserTable(String databaseId, String tableId, boolean isSoftDelete);
+
+  /**
+   * Always a hard delete: {@code soft_deleted_user_table_row} carries no discriminator, so a view
+   * routed through it would restore as a table.
+   */
+  void deleteUserView(String databaseId, String tableId);
 
   /**
    * Create or update a {@link UserTable} row in House table.
@@ -54,7 +80,8 @@ public interface UserTablesService {
   Pair<UserTableDto, Boolean> putUserTable(UserTable userTable);
 
   /**
-   * Rename a {@link UserTable} row in House table.
+   * Rename a {@link UserTable} row in House table. Table-only: views are not renameable, so there
+   * is deliberately no view equivalent.
    *
    * @param fromDatabaseId The databaseId of the row to rename.
    * @param fromTableId The tableId of the row to rename.
