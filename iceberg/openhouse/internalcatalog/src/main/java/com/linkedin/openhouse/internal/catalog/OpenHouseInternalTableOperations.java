@@ -63,6 +63,7 @@ import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.BadRequestException;
 import org.apache.iceberg.exceptions.CommitFailedException;
 import org.apache.iceberg.exceptions.CommitStateUnknownException;
+import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.exceptions.NotFoundException;
 import org.apache.iceberg.exceptions.ValidationException;
 import org.apache.iceberg.expressions.Expressions;
@@ -128,7 +129,23 @@ public class OpenHouseInternalTableOperations extends BaseMetastoreTableOperatio
           String.format(
               "Cannot find table %s after refresh, maybe another process deleted it", tableName()));
     }
+    // Defence in depth: the table read is already typed, but view metadata is a different
+    // document and must never reach TableMetadataParser.
+    houseTable
+        .filter(row -> !isTableEntity(row))
+        .ifPresent(
+            row -> {
+              throw new NoSuchTableException(
+                  "Table does not exist: %s.%s",
+                  tableIdentifier.namespace().toString(), tableIdentifier.name());
+            });
     refreshMetadata(houseTable.map(HouseTable::getTableLocation).orElse(null));
+  }
+
+  /** Only a legacy row, with no discriminator at all, defaults to TABLE. */
+  private static boolean isTableEntity(HouseTable houseTable) {
+    String entityType = houseTable.getEntityType();
+    return entityType == null || CatalogConstants.ENTITY_TYPE_TABLE.equals(entityType);
   }
 
   /** A wrapper function to encapsulate timer logic for loading metadata. */

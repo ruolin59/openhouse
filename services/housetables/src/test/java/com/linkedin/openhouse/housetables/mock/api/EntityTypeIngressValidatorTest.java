@@ -26,7 +26,7 @@ public class EntityTypeIngressValidatorTest {
         .build();
   }
 
-  /** The wire field stays nullable for rolling deploys: the route resolves it, never rejects it. */
+  /** The route resolves an absent value rather than rejecting it. */
   @ParameterizedTest
   @NullSource
   @ValueSource(strings = {"TABLE", "table", "TaBlE"})
@@ -41,6 +41,18 @@ public class EntityTypeIngressValidatorTest {
   public void testViewRouteStampsCanonicalViewForAgreeingOrSilentPayloads(String declared) {
     Assertions.assertEquals(
         "VIEW", validator.normalize(entity(declared), EntityType.VIEW).getEntityType());
+  }
+
+  /** Stated on its own because it is the behaviour the contract change deliberately keeps. */
+  @ParameterizedTest
+  @EnumSource(EntityType.class)
+  public void testAbsentEntityTypeIsStillStampedFromTheRouteAsADefensiveFallback(
+      EntityType routeEntityType) {
+    UserTable submitted = entity(null);
+
+    UserTable normalized = validator.normalize(submitted, routeEntityType);
+
+    Assertions.assertEquals(routeEntityType.name(), normalized.getEntityType());
   }
 
   /** Every other field is carried through untouched; only the discriminator is decided here. */

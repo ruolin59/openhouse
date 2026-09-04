@@ -94,6 +94,49 @@ public class UserHouseTablesOpenApiContractTest {
     return false;
   }
 
+  private JsonObject generatedUserTableSchema() throws Exception {
+    String document =
+        mvc.perform(MockMvcRequestBuilders.get("/v3/api-docs"))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+    JsonObject schemas =
+        JsonParser.parseString(document)
+            .getAsJsonObject()
+            .getAsJsonObject("components")
+            .getAsJsonObject("schemas");
+    assertThat(schemas.keySet()).contains("UserTable");
+    return schemas.getAsJsonObject("UserTable");
+  }
+
+  /** The route-side stamp is a server behaviour, not a contract permission to omit the field. */
+  @Test
+  public void testUserTableSchemaDeclaresEntityTypeAsRequired() throws Exception {
+    JsonObject userTable = generatedUserTableSchema();
+
+    assertThat(userTable.has("required"))
+        .withFailMessage("UserTable declares no required fields at all")
+        .isTrue();
+    Set<String> required = new LinkedHashSet<>();
+    userTable.getAsJsonArray("required").forEach(field -> required.add(field.getAsString()));
+
+    assertThat(required).contains("entityType");
+  }
+
+  /** The old description told callers that omitting the field meant TABLE. */
+  @Test
+  public void testEntityTypeDescriptionNoLongerOffersNullAsASpelling() throws Exception {
+    JsonObject entityType =
+        generatedUserTableSchema().getAsJsonObject("properties").getAsJsonObject("entityType");
+
+    String description = entityType.get("description").getAsString();
+    // Case-insensitive: "TABLE or null" and "may be null" offer the same removed spelling.
+    assertThat(description).doesNotContainIgnoringCase("null");
+    assertThat(description).containsIgnoringCase("case-insensitiv");
+  }
+
   @Test
   public void testGeneratedDocumentDeclaresExactlyTheFrozenResponseCodes() throws Exception {
     assertThat(generatedUserTableOperations())

@@ -153,6 +153,16 @@ public class OpenHouseInternalCatalog extends BaseMetastoreCatalog {
     }
   }
 
+  /**
+   * A row being present does not make it a table. Only a legacy row, which carries no discriminator
+   * at all, is treated as one; every other value must be exactly TABLE.
+   */
+  private static boolean isTableEntity(HouseTable houseTable) {
+    String entityType = houseTable.getEntityType();
+    // Exact match only: a differently-cased value is a corrupted row, not a table.
+    return entityType == null || CatalogConstants.ENTITY_TYPE_TABLE.equals(entityType);
+  }
+
   @Override
   public boolean dropTable(TableIdentifier identifier, boolean purge) {
     // Look up the HouseTable row directly instead of calling loadTable(), so drop works even when
@@ -160,6 +170,11 @@ public class OpenHouseInternalCatalog extends BaseMetastoreCatalog {
     HouseTable houseTable =
         findHouseTable(identifier)
             .orElseThrow(() -> new NoSuchTableException("Table does not exist: %s", identifier));
+    if (!isTableEntity(houseTable)) {
+      // Reject before pointer/prefix deletion: a table-API drop of a view would delete a live
+      // pointer and, with purge, its storage prefix.
+      throw new NoSuchTableException("Table does not exist: %s", identifier);
+    }
 
     HouseTablePrimaryKey primaryKey =
         HouseTablePrimaryKey.builder()
@@ -210,6 +225,14 @@ public class OpenHouseInternalCatalog extends BaseMetastoreCatalog {
 
   @Override
   public void renameTable(TableIdentifier from, TableIdentifier to) {
+    // Must precede loadTable, which would build table operations over view metadata.
+    findHouseTable(from)
+        .filter(houseTable -> !isTableEntity(houseTable))
+        .ifPresent(
+            houseTable -> {
+              throw new NoSuchTableException("Table does not exist: %s", from);
+            });
+
     Table fromTable = loadTable(from);
     String tableClusterId = fromTable.properties().get(CatalogConstants.OPENHOUSE_CLUSTERID_KEY);
 

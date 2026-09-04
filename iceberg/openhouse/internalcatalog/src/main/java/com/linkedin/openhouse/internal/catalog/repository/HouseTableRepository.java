@@ -3,6 +3,7 @@ package com.linkedin.openhouse.internal.catalog.repository;
 import com.linkedin.openhouse.internal.catalog.model.HouseTable;
 import com.linkedin.openhouse.internal.catalog.model.HouseTablePrimaryKey;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.repository.PagingAndSortingRepository;
@@ -63,4 +64,30 @@ public interface HouseTableRepository
    * @param deletedAtMs The timestamp when the table was deleted
    */
   void restoreTable(String databaseId, String tableId, long deletedAtMs);
+
+  /**
+   * Returns whichever entity occupies the key, of any type, so a caller can classify a collision.
+   * Advisory only: never a write precondition, because the single House Table compare-and-swap is
+   * the sole race arbiter.
+   */
+  Optional<HouseTable> findEntityById(HouseTablePrimaryKey houseTablePrimaryKey);
+
+  /** Resolves only VIEW rows; a table at the same key reads as absent. */
+  Optional<HouseTable> findViewById(HouseTablePrimaryKey houseTablePrimaryKey);
+
+  /** House Table filters VIEW before paginating, so no row is read to be discarded. */
+  Page<HouseTable> findAllViewsByDatabaseId(String databaseId, Pageable pageable);
+
+  /**
+   * Exactly one attempt, un-retried: an ambiguous 5xx, 504, or block timeout surfaces as unknown
+   * state rather than a blind second write that could double-apply.
+   */
+  HouseTable saveView(HouseTable houseTable);
+
+  /**
+   * Hard delete; views have no soft-delete store.
+   *
+   * @return false when the key is absent or holds a non-view
+   */
+  boolean deleteViewById(HouseTablePrimaryKey houseTablePrimaryKey);
 }

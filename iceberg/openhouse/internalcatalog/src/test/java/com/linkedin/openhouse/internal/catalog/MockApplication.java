@@ -1,6 +1,8 @@
 package com.linkedin.openhouse.internal.catalog;
 
 import com.linkedin.openhouse.cluster.storage.StorageManager;
+import com.linkedin.openhouse.cluster.storage.StorageType;
+import com.linkedin.openhouse.cluster.storage.selector.StorageSelector;
 import com.linkedin.openhouse.internal.catalog.fileio.FileIOConfig;
 import com.linkedin.openhouse.internal.catalog.fileio.FileIOManager;
 import java.io.IOException;
@@ -31,6 +33,16 @@ public class MockApplication {
   @MockBean FileIOManager fileIOManager;
 
   @MockBean FileIOConfig fileIOConfig;
+
+  /**
+   * Required by {@link
+   * com.linkedin.openhouse.internal.catalog.view.OpenHouseInternalViewConfiguration}, which is
+   * component-scanned here under Iceberg 1.5 and needs the storage seam its repository bean uses to
+   * select storage on create and to resolve a pointer row's storage on read.
+   */
+  @MockBean StorageSelector storageSelector;
+
+  @MockBean StorageType storageType;
 
   static final FsPermission FS_PERMISSION =
       new FsPermission(FsAction.ALL, FsAction.NONE, FsAction.NONE);

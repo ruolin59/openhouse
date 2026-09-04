@@ -162,9 +162,8 @@ public class OpenHouseUserTablesValidatorTest {
   }
 
   /**
-   * Load-bearing: the PUT path relies on Bean Validation on the transport model, so the pattern on
-   * {@code UserTable#entityType} must accept every TABLE/VIEW spelling. Omitting the field entirely
-   * stays valid too, for legacy table writers.
+   * Load-bearing: the PUT path relies on Bean Validation, so the pattern must accept every
+   * TABLE/VIEW spelling. An omitted field must still bind, or the route could not stamp it.
    */
   @ParameterizedTest
   @NullSource

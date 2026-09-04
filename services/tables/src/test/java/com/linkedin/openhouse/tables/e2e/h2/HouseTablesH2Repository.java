@@ -8,6 +8,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
 import org.springframework.context.annotation.Primary;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -118,5 +120,50 @@ public interface HouseTablesH2Repository extends HouseTableRepository {
       throw new com.linkedin.openhouse.common.exception.NoSuchUserTableException(
           databaseId, tableId);
     }
+  }
+
+  /* ---- Typed view accessors. Default bodies, because Spring Data derives a query from every
+   * abstract method name it sees and none of these is derivable. ---- */
+
+  String ENTITY_TYPE_VIEW = "VIEW";
+
+  @Override
+  default Optional<HouseTable> findEntityById(HouseTablePrimaryKey houseTablePrimaryKey) {
+    return this.findById(houseTablePrimaryKey);
+  }
+
+  @Override
+  default Optional<HouseTable> findViewById(HouseTablePrimaryKey houseTablePrimaryKey) {
+    return this.findById(houseTablePrimaryKey)
+        .filter(houseTable -> ENTITY_TYPE_VIEW.equals(houseTable.getEntityType()));
+  }
+
+  @Override
+  default Page<HouseTable> findAllViewsByDatabaseId(String databaseId, Pageable pageable) {
+    List<HouseTable> views =
+        this.findAllByDatabaseId(databaseId).stream()
+            .filter(houseTable -> ENTITY_TYPE_VIEW.equals(houseTable.getEntityType()))
+            .collect(Collectors.toList());
+    int page = pageable.getPageNumber();
+    int size = pageable.getPageSize();
+    List<HouseTable> pageContent =
+        views.subList(
+            Math.min(page * size, views.size()), Math.min((page + 1) * size, views.size()));
+    return new PageImpl<>(pageContent, PageRequest.of(page, size), views.size());
+  }
+
+  @Override
+  default HouseTable saveView(HouseTable houseTable) {
+    // Mirrors House Table stamping the type from the route.
+    return this.save(houseTable.toBuilder().entityType(ENTITY_TYPE_VIEW).build());
+  }
+
+  @Override
+  default boolean deleteViewById(HouseTablePrimaryKey houseTablePrimaryKey) {
+    if (!this.findViewById(houseTablePrimaryKey).isPresent()) {
+      return false;
+    }
+    this.deleteById(houseTablePrimaryKey);
+    return true;
   }
 }

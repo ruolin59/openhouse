@@ -6,9 +6,8 @@ import com.linkedin.openhouse.housetables.model.EntityType;
 import org.springframework.stereotype.Component;
 
 /**
- * Resolves the entity type of a PUT payload at ingress, ahead of every other validation. The wire
- * field stays nullable for rolling compatibility: a payload may agree with its route or stay
- * silent, never override it.
+ * Stamps the route's canonical entity type onto a PUT payload at ingress, ahead of other
+ * validation. A payload may agree with its route or omit the type; it may never contradict it.
  */
 @Component
 public class EntityTypeIngressValidator {
