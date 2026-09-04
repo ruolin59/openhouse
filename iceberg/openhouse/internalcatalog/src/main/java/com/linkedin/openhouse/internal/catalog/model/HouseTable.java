@@ -53,8 +53,9 @@ public class HouseTable {
   private String storageType;
 
   /**
-   * Entity-type discriminator ({@code TABLE}/{@code VIEW}) for the row at this key; a null legacy
-   * row means TABLE.
+   * Entity-type discriminator ({@code TABLE}/{@code VIEW}) for the row at this key. An HTS-backed
+   * read never sees null (House Table resolves a legacy null to TABLE); the write-side pointer and
+   * repositories that map this entity directly can leave it null, so consumers treat null as TABLE.
    */
   private String entityType;
 }
