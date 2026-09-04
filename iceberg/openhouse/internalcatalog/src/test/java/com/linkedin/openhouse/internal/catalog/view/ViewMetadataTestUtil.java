@@ -13,12 +13,8 @@ import org.apache.iceberg.view.ViewRepresentation;
 import org.apache.iceberg.view.ViewVersion;
 
 /**
- * Builds real {@link ViewMetadata} for tests, so read-path assertions run against genuine Iceberg
- * objects rather than mocks of them.
- *
- * <p>Only test code lives here; the production build path is deliberately not duplicated. In
- * particular the candidate version id below is arbitrary: Iceberg reassigns or de-duplicates it,
- * and every assertion in these tests reads the resulting metadata.
+ * Builds real {@link ViewMetadata} so read-path assertions run against genuine Iceberg objects. The
+ * candidate version id below is arbitrary: Iceberg reassigns it.
  */
 public final class ViewMetadataTestUtil {
 

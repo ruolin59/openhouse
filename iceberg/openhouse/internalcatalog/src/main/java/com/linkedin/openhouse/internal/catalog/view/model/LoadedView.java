@@ -9,12 +9,7 @@ import lombok.ToString;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.catalog.Namespace;
 
-/**
- * A fully resolved view: its pointer plus the fields parsed out of the metadata file.
- *
- * <p>Version-neutral by construction: it exposes no {@code org.apache.iceberg.view.*} type, so the
- * shared repository interface that returns it stays loadable under Iceberg 1.2.
- */
+/** Assigned by Iceberg, never computed by OpenHouse. */
 @Builder(toBuilder = true)
 @Getter
 @EqualsAndHashCode

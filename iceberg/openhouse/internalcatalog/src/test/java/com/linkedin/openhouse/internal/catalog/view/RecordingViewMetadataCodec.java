@@ -6,11 +6,8 @@ import org.apache.iceberg.io.OutputFile;
 import org.apache.iceberg.view.ViewMetadata;
 
 /**
- * Delegating codec that appends each parse and write to the shared event log, so the ordering
- * obligation "write the immutable file, then publish" can be asserted as a sequence.
- *
- * <p>It delegates to a Mockito spy, so interaction verification on the underlying codec keeps
- * working alongside the log.
+ * Appends each parse and write to the shared event log so "write the file, then publish" can be
+ * asserted as a sequence. Delegates to a Mockito spy, so interaction verification still works.
  */
 public class RecordingViewMetadataCodec implements ViewMetadataCodec {
 

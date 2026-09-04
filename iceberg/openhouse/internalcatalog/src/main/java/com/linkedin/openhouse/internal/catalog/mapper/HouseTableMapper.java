@@ -19,7 +19,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 @Mapper(componentModel = "spring")
 public abstract class HouseTableMapper {
 
-  /** Canonical House Table discriminator values; the column vocabulary is exactly these two. */
   static final String ENTITY_TYPE_TABLE = "TABLE";
 
   static final String ENTITY_TYPE_VIEW = "VIEW";
@@ -50,23 +49,14 @@ public abstract class HouseTableMapper {
   })
   public abstract HouseTable toHouseTable(UserTable userTable);
 
-  /**
-   * The outgoing table write. Entity type is a required field of the House Table contract, so it is
-   * stamped here rather than left for the route to infer; this is also the mapping every caller
-   * that builds a table-shaped {@code UserTable} gets, so the discriminator can never be omitted by
-   * accident.
-   */
+  /** Stamps TABLE here so no table-shaped caller can omit the required discriminator. */
   @Mappings({
     @Mapping(target = "metadataLocation", source = "houseTable.tableLocation"),
     @Mapping(target = "entityType", constant = ENTITY_TYPE_TABLE)
   })
   public abstract UserTable toUserTable(HouseTable houseTable);
 
-  /**
-   * The outgoing view write. Views share the pointer shape with tables, so they share everything
-   * but the discriminator, which is declared explicitly rather than overriding the table mapping
-   * after the fact.
-   */
+  /** Same pointer shape as a table write; only the discriminator differs. */
   @Mappings({
     @Mapping(target = "metadataLocation", source = "houseTable.tableLocation"),
     @Mapping(target = "entityType", constant = ENTITY_TYPE_VIEW)
@@ -91,16 +81,8 @@ public abstract class HouseTableMapper {
         && HouseTableSerdeUtils.HTS_FIELD_NAMES.contains(stripOhNamespace(key));
   }
 
-  /**
-   * MapStruct picks this up as the implicit String-to-String mapping for every string property, and
-   * {@code toHouseTable} relies on that to strip the namespace from values as well as keys. It must
-   * therefore tolerate null, because {@code tableVersion} and {@code storageType} carry no
-   * {@code @NotEmpty} and are legitimately absent on a read.
-   */
-  static String stripOhNamespace(String key) {
-    if (key == null) {
-      return null;
-    }
+  /** Private so MapStruct cannot adopt it as an implicit String mapping for every field value. */
+  private static String stripOhNamespace(String key) {
     return IS_OH_PREFIXED.test(key) ? key.substring(OPENHOUSE_NAMESPACE.length()) : key;
   }
 }

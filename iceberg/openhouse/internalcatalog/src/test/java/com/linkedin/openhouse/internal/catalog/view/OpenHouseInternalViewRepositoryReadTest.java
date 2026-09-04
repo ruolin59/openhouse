@@ -41,11 +41,9 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 
 /**
- * Read-side behavior of the view commit repository: load probes, storage selection, listing,
- * dropping, and the unsupported rename.
- *
- * <p>Every collaborator that could touch storage is a mock, so "this path cost nothing" is asserted
- * directly rather than inferred.
+ * Read-side behaviour: load probes, storage selection, listing, dropping, unsupported rename. Every
+ * collaborator that could touch storage is a mock, so "this cost nothing" is asserted, not
+ * inferred.
  */
 public class OpenHouseInternalViewRepositoryReadTest {
 
@@ -78,10 +76,7 @@ public class OpenHouseInternalViewRepositoryReadTest {
             houseTableMapper);
   }
 
-  /**
-   * A failed probe is the common case for "does this view exist"; it must not cost a storage
-   * selection, a FileIO, an input file, or a parse.
-   */
+  /** The common case, so it must not cost a storage selection, a FileIO, or a parse. */
   @Test
   void loadViewOnAbsentPointerCostsOneTypedLookupAndNothingElse() {
     when(houseTableRepository.findViewById(any(HouseTablePrimaryKey.class)))
@@ -97,10 +92,7 @@ public class OpenHouseInternalViewRepositoryReadTest {
     verifyNoInteractions(storageSelector);
   }
 
-  /**
-   * Defense in depth: the typed endpoint should never hand back a table, but if it does the answer
-   * is still "no such view", and still without touching storage.
-   */
+  /** The typed endpoint should never return a table; if it does, the answer is still no. */
   @Test
   void loadViewOnDefensiveTablePayloadCostsOneTypedLookupAndNothingElse() {
     when(houseTableRepository.findViewById(any(HouseTablePrimaryKey.class)))
@@ -114,10 +106,7 @@ public class OpenHouseInternalViewRepositoryReadTest {
     verifyNoInteractions(storageSelector);
   }
 
-  /**
-   * A genuine view resolves its FileIO from the storage recorded on its own pointer row, never from
-   * the cluster-wide storage selector, and parses exactly the path the row names.
-   */
+  /** FileIO comes from the row's own storage, never the cluster-wide selector. */
   @Test
   void loadViewSelectsFileIoFromPointerRowStorageAndParsesExactlyThatPath() {
     HouseTable row = ViewTestFixtures.viewRow(METADATA_PATH);
@@ -168,10 +157,7 @@ public class OpenHouseInternalViewRepositoryReadTest {
         "last-modified must come from the parsed metadata, not from the clock");
   }
 
-  /**
-   * A view whose metadata file is missing or unreadable is broken, not absent. Collapsing it into
-   * "no such view" would let a later create quietly overwrite a live pointer.
-   */
+  /** Broken, not absent: collapsing this would let a later create overwrite a live pointer. */
   @Test
   void loadViewPropagatesCorruptMetadataInsteadOfReportingAbsence() {
     HouseTable row = ViewTestFixtures.viewRow(METADATA_PATH);
@@ -210,10 +196,7 @@ public class OpenHouseInternalViewRepositoryReadTest {
     verifyNoInteractions(fileIOManager);
   }
 
-  /**
-   * Drop is a typed hard pointer delete. It parses nothing, deletes no data, writes no soft-delete
-   * row, and never falls back to the table delete path that would purge storage.
-   */
+  /** Never falls back to the table delete path, which would purge storage. */
   @Test
   void dropViewIsATypedHardPointerDeleteWithNoStorageOrParserWork() {
     when(houseTableRepository.deleteViewById(any(HouseTablePrimaryKey.class))).thenReturn(true);
@@ -240,11 +223,7 @@ public class OpenHouseInternalViewRepositoryReadTest {
     verifyNoInteractions(viewMetadataCodec);
   }
 
-  /**
-   * House Table writes the canonical constant name, so a differently-cased value is a corrupted
-   * row, not a view. Accepting it would let a defence built on the discriminator be bypassed by a
-   * value the contract never produces.
-   */
+  /** A differently-cased value is a corrupted row, not a view. */
   @Test
   void loadViewRejectsANonCanonicalViewDiscriminator() {
     when(houseTableRepository.findViewById(any(HouseTablePrimaryKey.class)))

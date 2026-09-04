@@ -37,16 +37,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Defense in depth for the table refresh path.
+ * Defence in depth for the table refresh path: a typed read should never return a view, but view
+ * metadata is a different document and must not reach {@code TableMetadataParser}.
  *
- * <p>Frozen House Table already serves table reads from a typed route, so a view should never come
- * back here. The guard exists because the cost of being wrong is high: table metadata and view
- * metadata are different documents, and handing view metadata to {@code TableMetadataParser} either
- * throws something unhelpful or, worse, half-parses. These tests pin the behavior so a future
- * un-typed read cannot silently reintroduce the hazard.
- *
- * <p>The metadata cache is mocked rather than stubbed, because "the parser was never reached" is
- * the actual claim; the cache is the single seam every metadata load goes through.
+ * <p>The cache is mocked because "the parser was never reached" is the claim, and the cache is the
+ * single seam every metadata load goes through.
  */
 public class OpenHouseInternalTableOperationsViewDefenseTest {
 
@@ -121,11 +116,7 @@ public class OpenHouseInternalTableOperationsViewDefenseTest {
     verifyNoInteractions(tableMetadataCache);
   }
 
-  /**
-   * A row written before the discriminator column existed carries a null entity type and means
-   * TABLE. Such a table must keep refreshing normally, metadata file and all — the guard must
-   * reject non-tables, not everything it cannot positively identify.
-   */
+  /** The guard must reject non-tables, not everything it cannot positively identify. */
   @Test
   void refreshLoadsALegacyRowWithNoEntityTypeAsANormalTable(@TempDir Path tempDir)
       throws IOException {
@@ -159,7 +150,7 @@ public class OpenHouseInternalTableOperationsViewDefenseTest {
     verify(repository, never()).save(any());
   }
 
-  /** An absent row is the ordinary pre-create refresh, not a type error. */
+  /** The ordinary pre-create refresh, not a type error. */
   @Test
   void refreshTreatsAnAbsentRowAsAPreCreateRefresh() {
     HouseTableRepository repository = mock(HouseTableRepository.class);

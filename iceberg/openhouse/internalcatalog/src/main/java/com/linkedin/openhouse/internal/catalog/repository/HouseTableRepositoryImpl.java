@@ -24,6 +24,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeoutException;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.apache.directory.api.util.Strings;
@@ -189,10 +190,7 @@ public class HouseTableRepositoryImpl implements HouseTableRepository {
     return mapHtsReadError(e);
   }
 
-  /**
-   * The same classification as {@link #handleHtsHttpError}, but generic in the response type so a
-   * paginated read can route its failures through it too.
-   */
+  /** Generic in the response type so a paginated read can share the classification. */
   private <T> Mono<T> mapHtsReadError(Throwable e) {
     if (e instanceof WebClientResponseException.NotFound) {
       return Mono.error(new HouseTableNotFoundException("", e));
@@ -403,11 +401,7 @@ public class HouseTableRepositoryImpl implements HouseTableRepository {
             houseTablePrimaryKey.getDatabaseId(), houseTablePrimaryKey.getTableId()));
   }
 
-  /**
-   * Occupancy questions answer "who is here", so a missing row is an answer rather than a failure.
-   * That is the one deliberate difference from {@link #findById}, which reports 404 as an exception
-   * because its callers are asking for a table they believe exists.
-   */
+  /** A missing row is an answer here, unlike {@link #findById}, whose callers expect a table. */
   private Optional<HouseTable> pointReadWithRetry(Mono<EntityResponseBodyUserTable> call) {
     return getHtsRetryTemplate(
             Arrays.asList(
@@ -443,9 +437,8 @@ public class HouseTableRepositoryImpl implements HouseTableRepository {
                             pageable.getPageNumber(),
                             pageable.getPageSize(),
                             getSortByStr(pageable))
-                        // Classify before blocking: a raw WebClientResponseException is not one of
-                        // the retryable types, so an untranslated 5xx would escape on the first
-                        // attempt and the bounded read retry would never engage.
+                        // Classify before blocking, or the raw failure is not retryable and the
+                        // bounded read retry never engages.
                         .onErrorResume(this::mapHtsReadError)
                         .block(Duration.ofSeconds(READ_REQUEST_TIMEOUT_SECONDS)));
 
@@ -459,52 +452,53 @@ public class HouseTableRepositoryImpl implements HouseTableRepository {
         new CreateUpdateEntityRequestBodyUserTable()
             .entity(houseTableMapper.toUserView(houseTable));
 
-    try {
-      return apiInstance
-          .putUserView(requestBody)
-          .map(EntityResponseBodyUserTable::getEntity)
-          .map(houseTableMapper::toHouseTable)
-          .onErrorResume(this::handleViewMutationError)
-          // An empty completion is a success signal carrying nothing, so it never reaches the error
-          // handler; returning null here would surface later as an NPE for a mutation that House
-          // Table may well have applied.
-          .switchIfEmpty(
-              Mono.error(
-                  new HouseTableRepositoryStateUnknownException(
-                      "HTS accepted the view write but returned no entity",
-                      new IllegalStateException("empty response"))))
-          .block(Duration.ofSeconds(WRITE_REQUEST_TIMEOUT_SECONDS));
-    } catch (IllegalStateException e) {
-      // Mono.block(Duration) reports its own timeout this way, outside the reactive chain. The
-      // request is already in flight, so the outcome is unknown rather than failed.
-      throw new HouseTableRepositoryStateUnknownException(
-          "Cannot determine if HTS has persisted the proposed view change", e);
-    }
+    return apiInstance
+        .putUserView(requestBody)
+        .map(EntityResponseBodyUserTable::getEntity)
+        .map(houseTableMapper::toHouseTable)
+        .onErrorResume(this::handleViewMutationError)
+        .switchIfEmpty(
+            Mono.error(
+                new HouseTableRepositoryStateUnknownException(
+                    "HTS accepted the view write but returned no entity",
+                    new IllegalStateException("empty response"))))
+        .timeout(
+            Duration.ofSeconds(WRITE_REQUEST_TIMEOUT_SECONDS),
+            Mono.error(
+                new HouseTableRepositoryStateUnknownException(
+                    "Cannot determine if HTS has persisted the proposed view change",
+                    new TimeoutException(
+                        "PUT /hts/views exceeded " + WRITE_REQUEST_TIMEOUT_SECONDS + " seconds"))))
+        .block();
   }
 
   @Override
   public boolean deleteViewById(HouseTablePrimaryKey houseTablePrimaryKey) {
-    try {
-      return Boolean.TRUE.equals(
-          apiInstance
-              .deleteView(houseTablePrimaryKey.getDatabaseId(), houseTablePrimaryKey.getTableId())
-              .thenReturn(Boolean.TRUE)
-              .onErrorResume(
-                  e ->
-                      e instanceof WebClientResponseException.NotFound
-                          ? Mono.just(Boolean.FALSE)
-                          : handleViewMutationError(e))
-              .block(Duration.ofSeconds(WRITE_REQUEST_TIMEOUT_SECONDS)));
-    } catch (IllegalStateException e) {
-      throw new HouseTableRepositoryStateUnknownException(
-          "Cannot determine if HTS has deleted the view", e);
-    }
+    return Boolean.TRUE.equals(
+        apiInstance
+            .deleteView(houseTablePrimaryKey.getDatabaseId(), houseTablePrimaryKey.getTableId())
+            .thenReturn(Boolean.TRUE)
+            .onErrorResume(
+                e ->
+                    e instanceof WebClientResponseException.NotFound
+                        ? Mono.just(Boolean.FALSE)
+                        : handleViewMutationError(e))
+            .timeout(
+                Duration.ofSeconds(WRITE_REQUEST_TIMEOUT_SECONDS),
+                Mono.error(
+                    new HouseTableRepositoryStateUnknownException(
+                        "Cannot determine if HTS has deleted the view",
+                        new TimeoutException(
+                            "DELETE /hts/views exceeded "
+                                + WRITE_REQUEST_TIMEOUT_SECONDS
+                                + " seconds"))))
+            .block());
   }
 
   /**
-   * Error translation for the two view mutations. It differs from {@link #handleHtsHttpError} in
-   * its default: an unclassified failure on a single-attempt, un-retried write leaves the outcome
-   * genuinely unknown, and saying "failed" would invite a retry that could double-apply.
+   * Differs from {@link #handleHtsHttpError} in its default: on a single-attempt write an
+   * unclassified failure leaves the outcome unknown, and "failed" would invite a double-applying
+   * retry.
    */
   private <T> Mono<T> handleViewMutationError(Throwable e) {
     if (e instanceof WebClientResponseException.NotFound) {

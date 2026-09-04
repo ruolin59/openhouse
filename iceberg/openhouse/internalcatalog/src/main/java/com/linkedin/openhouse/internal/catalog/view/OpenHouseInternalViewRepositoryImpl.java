@@ -53,15 +53,11 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 /**
- * Iceberg-1.5 implementation of {@link OpenHouseInternalViewRepository}.
- *
- * <p>Registered only from {@link OpenHouseInternalViewConfiguration}, never as an unconditional
- * component, so an Iceberg-1.2 runtime never introspects it.
- *
- * <p>Every commit has the same shape: capture the base, build the metadata, write the immutable
- * file, then perform exactly one House Table compare-and-swap carrying the exact captured token.
- * Nothing is re-read or rebuilt between the capture and the swap, and the swap is never retried,
- * because the swap is the sole arbiter of a race and a second attempt could double-apply.
+ * Iceberg-1.5 implementation of {@link OpenHouseInternalViewRepository}. Registered only from
+ * {@link OpenHouseInternalViewConfiguration}, so an Iceberg-1.2 runtime never introspects it. Every
+ * commit captures the base, builds the metadata, writes the immutable file, then performs exactly
+ * one House Table compare-and-swap on the captured token; the swap is the sole arbiter of a race
+ * and is never retried, since a second attempt could double-apply.
  */
 @AllArgsConstructor
 @Slf4j
@@ -99,8 +95,7 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
   }
 
   private ViewCommitResult create(ViewCommitIntent intent) {
-    // Advisory only: it selects which collision the caller is told about. The swap below, not this
-    // read, is what actually prevents two creates from both succeeding.
+    // Advisory only: it picks the collision message. The swap below is what prevents two creates.
     houseTableRepository
         .findEntityById(keyOf(intent.getDatabaseId(), intent.getViewId()))
         .ifPresent(occupant -> rejectOccupiedName(intent, occupant));
@@ -151,20 +146,13 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
       throw new AlreadyExistsException(
           "View already exists: %s.%s", intent.getDatabaseId(), intent.getViewId());
     }
-    // A legacy row carries no discriminator and means TABLE. Anything else, including a value that
-    // merely looks like a known type in the wrong case, is reported as-is: failing closed is the
-    // only safe answer when we cannot tell what owns the name.
+    // Legacy null means TABLE; anything else is reported as-is rather than assumed harmless.
     String occupantType =
         occupant.getEntityType() == null ? ENTITY_TYPE_TABLE : occupant.getEntityType();
     throw new ViewNameOccupiedException(intent.getDatabaseId(), intent.getViewId(), occupantType);
   }
 
-  /**
-   * House Table's discriminator contract is the canonical constant name, written by {@code
-   * EntityType.name()} and read back through a converter that turns a legacy NULL into TABLE.
-   * Matching case-insensitively would accept a value the contract never produces, so a corrupted
-   * row would be trusted instead of rejected. Only the exact spelling counts.
-   */
+  /** Exact spelling only: a differently-cased value is a corrupted row, not a view. */
   private static boolean isView(String entityType) {
     return ENTITY_TYPE_VIEW.equals(entityType);
   }
@@ -186,8 +174,7 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
     userProperties.putAll(userPropertiesOf(intent));
 
     if (isUnchanged(intent, current, userProperties, currentUserProperties)) {
-      // Nothing observable would change, so writing a file and moving the pointer would manufacture
-      // a new version and a new last-modified time out of a request that asked for neither.
+      // Nothing observable changes, so do not manufacture a version or a last-modified time.
       return ViewCommitResult.builder()
           .pointer(pointerOf(row))
           .viewUuid(current.uuid())
@@ -218,8 +205,7 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
         current.properties().getOrDefault(getCanonicalFieldName("creationTime"), now));
     properties.put(getCanonicalFieldName("lastModifiedTime"), now);
 
-    // buildFrom preserves UUID, location, schemas, versions, and history; Iceberg assigns the
-    // resulting version id and rejects a replacement that drops a stored dialect.
+    // buildFrom preserves identity and history; Iceberg assigns the resulting version id.
     ViewMetadata metadata =
         ViewMetadata.buildFrom(current)
             .setCurrentVersion(
@@ -234,9 +220,8 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
   }
 
   /**
-   * The repository owns this comparison. Iceberg 1.5.2.21 cannot answer it for us: {@code
-   * sameViewVersion} compares the whole summary map, and every submission carries a fresh timestamp
-   * and operation, so Iceberg treats every resubmission as new.
+   * Repository-owned: Iceberg's {@code sameViewVersion} compares the whole summary map, and every
+   * submission carries a fresh timestamp and operation, so it treats each one as new.
    */
   private boolean isUnchanged(
       ViewCommitIntent intent,
@@ -244,8 +229,7 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
       Map<String, String> mergedUserProperties,
       Map<String, String> currentUserProperties) {
     ViewVersion version = current.currentVersion();
-    // sameSchema, not asStruct: the struct alone ignores identifier-field ids, so a change that
-    // only moves the identifier fields would read as identical and be silently dropped.
+    // sameSchema, not asStruct: the struct ignores identifier-field ids.
     return current.schema().sameSchema(intent.getSchema())
         && representationsOf(version).equals(representationsOf(intent.getRepresentations()))
         && Objects.equals(
@@ -256,14 +240,9 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
   }
 
   /**
-   * Writes the immutable metadata file and then publishes once. The order matters: publishing first
-   * would advertise a pointer to a file that may never exist, and the loser of a swap must leave
-   * behind an unreachable file rather than a broken pointer.
-   *
-   * <p>The expected version is not passed separately because it is already stamped into the
-   * metadata as {@code openhouse.tableVersion} and travels to the pointer row from there;
-   * re-deriving it here is exactly the mistake that would turn a conditional write into a blind
-   * one.
+   * Writes the file before publishing, so a swap loser leaves an unreachable file rather than a
+   * pointer to nothing. The expected version travels inside the metadata as {@code
+   * openhouse.tableVersion}; re-deriving it here would turn a conditional write into a blind one.
    */
   private ViewCommitResult writeThenPublish(
       ViewCommitIntent intent,
@@ -281,8 +260,7 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
     try {
       saved = houseTableRepository.saveView(pointer);
     } catch (HouseTableConcurrentUpdateException e) {
-      // The same 409 means different things by operation: a create lost a name, a replace lost a
-      // commit. Collapsing them would hide which one the caller can act on and how.
+      // A create lost a name; a replace lost a commit. The caller acts on each differently.
       if (created) {
         throw new AlreadyExistsException(
             e, "View already exists: %s.%s", intent.getDatabaseId(), intent.getViewId());
@@ -293,7 +271,7 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
           intent.getDatabaseId(),
           intent.getViewId());
     } catch (HouseTableRepositoryStateUnknownException e) {
-      // Deliberately not retried and not re-read: the write may well have landed.
+      // Not retried and not re-read: the write may well have landed.
       throw new CommitStateUnknownException(e);
     }
 
@@ -350,9 +328,8 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
   }
 
   /**
-   * A missing row and a row holding something other than a view are the same answer to the caller:
-   * there is no such view. Reporting a table as absent would be worse than useless, because a later
-   * create would then be told the name is free.
+   * Absent and non-view are the same answer. Reporting a table as absent would tell a later create
+   * that the name is free.
    */
   private HouseTable requireViewRow(String databaseId, String viewId) {
     HouseTable row =
@@ -367,9 +344,9 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
   }
 
   /**
-   * Iceberg stores at most one query per dialect and compares dialects case-insensitively. Checking
-   * here, before no-op detection, means a duplicate is always answered as a caller error rather
-   * than being able to short-circuit into a no-op that never reaches Iceberg's own check.
+   * Reject duplicate dialects (compared case-insensitively) before no-op detection, so a duplicate
+   * is always a caller error instead of short-circuiting into a no-op that never reaches Iceberg's
+   * check.
    */
   private void rejectDuplicateDialects(ViewCommitIntent intent) {
     if (intent.getRepresentations() == null) {
@@ -384,18 +361,14 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
     }
   }
 
-  /**
-   * Wall-clock milliseconds. Overridable so a test can pin it; the monotonic guard in {@link
-   * #advanceLastModified} is what keeps a changed commit observably newer regardless.
-   */
+  /** Overridable so a test can pin it. */
   protected long nowMillis() {
     return Instant.now(Clock.systemUTC()).toEpochMilli();
   }
 
   /**
-   * A changed commit must be observably newer than the version it replaced. Two commits inside one
-   * millisecond, or a backward clock adjustment, would otherwise leave last-modified equal or lower
-   * while {@code metadataChanged} says something changed.
+   * Keep a changed commit observably newer than the version it replaced: two commits in the same
+   * millisecond, or a backward clock, would otherwise leave last-modified equal or lower.
    */
   private long advanceLastModified(long previousLastModified) {
     long now = nowMillis();
@@ -468,10 +441,7 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
     return value == null ? 0L : Long.parseLong(value);
   }
 
-  /**
-   * The submitted version id is a placeholder. Iceberg reassigns it, so asserting on it anywhere
-   * would be asserting on our own input rather than on what was stored.
-   */
+  /** The submitted version id is a placeholder; Iceberg reassigns it. */
   private static ViewVersion candidateVersion(
       ViewCommitIntent intent,
       int candidateVersionId,
@@ -509,10 +479,8 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
   }
 
   /**
-   * A sorted list of dialect/SQL pairs rather than a map keyed by dialect. A map silently drops
-   * every entry but the last for a repeated dialect, which would let an invalid submission compare
-   * equal to a valid stored definition and be answered as a no-op. Order is normalized because a
-   * view's representations are looked up by dialect, so their order carries no meaning.
+   * Sorted pairs, not a map: a map drops all but the last entry for a repeated dialect, letting an
+   * invalid submission compare equal to a valid stored definition. Order carries no meaning.
    */
   private static List<String> representationsOf(ViewVersion version) {
     List<String> pairs = new ArrayList<>();
@@ -553,11 +521,7 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
     return representations;
   }
 
-  /**
-   * Metadata files live directly under the allocated base, mirroring the table convention. The
-   * embedded UUID is what lets two writers at the same version each write their own candidate
-   * without colliding, which is a precondition for the swap being the only arbiter.
-   */
+  /** The embedded UUID lets concurrent writers each write a candidate without colliding. */
   private static String metadataFileLocation(String viewLocation, int version) {
     return String.format(
         "%s/%05d-%s%s", viewLocation, version, UUID.randomUUID(), METADATA_FILE_EXTENSION);

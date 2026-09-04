@@ -30,11 +30,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Races arbitrated by the single House Table compare-and-swap.
- *
- * <p>Determinism comes from a barrier installed in the in-memory swap: both threads are guaranteed
- * to be inside the swap window before either can win, so the outcome does not depend on scheduling.
- * There is no sleeping and no timing-based assertion anywhere in this class.
+ * Races arbitrated by the single House Table compare-and-swap. A barrier inside the swap guarantees
+ * both threads are in the window before either can win, so no outcome depends on scheduling.
  */
 public class OpenHouseInternalViewRepositoryConcurrencyTest {
 
@@ -52,11 +49,7 @@ public class OpenHouseInternalViewRepositoryConcurrencyTest {
     executor.shutdownNow();
   }
 
-  /**
-   * Two creates that both saw the name free still produce exactly one view. The advisory occupancy
-   * read cannot prevent this race, so the swap has to, and the loser must be told the view already
-   * exists rather than that its commit failed.
-   */
+  /** The advisory occupancy read cannot prevent this race, so the swap has to. */
   @Test
   void concurrentCreatesProduceExactlyOneWinnerAndOnePointer() throws Exception {
     CyclicBarrier bothInsideSwapWindow = new CyclicBarrier(2);
@@ -89,10 +82,7 @@ public class OpenHouseInternalViewRepositoryConcurrencyTest {
     Assertions.assertTrue(outcome.success().isCreated());
   }
 
-  /**
-   * Two replaces from the same base: the metadata path is the compare-and-swap token, so the second
-   * one to reach the swap is stale by definition and must fail rather than clobber the winner.
-   */
+  /** The path is the token, so the second to reach the swap is stale by definition. */
   @Test
   void concurrentReplacesFromTheSameBaseLeaveExactlyOneWinner() throws Exception {
     ViewCommitResult created = harness.getViewRepository().commit(ViewTestFixtures.createIntent());
@@ -137,12 +127,8 @@ public class OpenHouseInternalViewRepositoryConcurrencyTest {
   }
 
   /**
-   * A genuine post-write swap failure: the loser passes the base check, writes its candidate file,
-   * and only then discovers that a competing commit moved the pointer. The competing commit is
-   * landed from inside the swap window, which is the only deterministic way to reach that state.
-   *
-   * <p>Staling the base before the call instead would get the loser rejected at the pre-write
-   * check, so it would never write anything and a file assertion would pass vacuously.
+   * A genuine post-write failure: the loser passes the base check and writes, then finds the
+   * pointer moved. Staling the base up front would reject it before the write and assert nothing.
    */
   @Test
   void aFailedSwapAfterTheCandidateWriteLeavesThatFileUnreachable() {

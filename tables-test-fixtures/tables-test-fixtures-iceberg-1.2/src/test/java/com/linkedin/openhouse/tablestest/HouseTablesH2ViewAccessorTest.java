@@ -15,15 +15,10 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 
 /**
- * Typed view accessors over the H2-backed House Table stand-in, with a mixed key space.
+ * Typed view accessors over the H2-backed House Table stand-in. A view and a table share one key
+ * space here exactly as they do in House Table, so an accessor behaving untyped would be visible.
  *
- * <p>These are the fixture's real in-memory semantics, not stubs, and they are the seam the
- * Iceberg-1.5 fixture will use to exercise commit/load/list/drop end to end. A view and a table
- * share one key space here exactly as they do in House Table, so a typed accessor that quietly
- * behaved like an untyped one would be visible.
- *
- * <p>The class lives in the 1.2 fixture's test sources, which the 1.5 fixture also compiles and
- * runs; every type named here exists in both Iceberg versions.
+ * <p>Lives in the 1.2 fixture's test sources, which the 1.5 fixture also compiles and runs.
  */
 public class HouseTablesH2ViewAccessorTest {
 
@@ -132,8 +127,7 @@ public class HouseTablesH2ViewAccessorTest {
 
   @Test
   public void typedDeleteRemovesTheViewAndLeavesEveryOtherRowIntact() {
-    // Snapshot copies, so the comparison is against detached values rather than whatever the
-    // persistence context happens to hand back afterwards.
+    // Snapshots, so the comparison is against detached values, not the persistence context.
     HouseTable tableBefore = repository.findEntityById(key("table_a")).get().toBuilder().build();
     HouseTable legacyBefore = repository.findEntityById(key("legacy_a")).get().toBuilder().build();
     HouseTable otherViewBefore = repository.findEntityById(key("view_b")).get().toBuilder().build();

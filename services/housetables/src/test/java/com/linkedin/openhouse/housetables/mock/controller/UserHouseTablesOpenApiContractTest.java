@@ -111,12 +111,7 @@ public class UserHouseTablesOpenApiContractTest {
     return schemas.getAsJsonObject("UserTable");
   }
 
-  /**
-   * The discriminator is part of the contract, not an optional hint a client may omit and let the
-   * route infer. Every first-party writer stamps it, so the document has to say so; the route-side
-   * stamp survives as a defensive fallback, which is a server behaviour rather than a contract
-   * permission to leave the field out.
-   */
+  /** The route-side stamp is a server behaviour, not a contract permission to omit the field. */
   @Test
   public void testUserTableSchemaDeclaresEntityTypeAsRequired() throws Exception {
     JsonObject userTable = generatedUserTableSchema();
@@ -130,18 +125,14 @@ public class UserHouseTablesOpenApiContractTest {
     assertThat(required).contains("entityType");
   }
 
-  /**
-   * The old description told callers that omitting the field meant TABLE. Leaving that in place
-   * would document the exact behaviour the contract change removes.
-   */
+  /** The old description told callers that omitting the field meant TABLE. */
   @Test
   public void testEntityTypeDescriptionNoLongerOffersNullAsASpelling() throws Exception {
     JsonObject entityType =
         generatedUserTableSchema().getAsJsonObject("properties").getAsJsonObject("entityType");
 
     String description = entityType.get("description").getAsString();
-    // Case-insensitive, because "TABLE or null", "may be null" and "null or TABLE" all offer the
-    // same removed spelling while sliding past an exact-substring check.
+    // Case-insensitive: "TABLE or null" and "may be null" offer the same removed spelling.
     assertThat(description).doesNotContainIgnoringCase("null");
     assertThat(description).containsIgnoringCase("case-insensitiv");
   }

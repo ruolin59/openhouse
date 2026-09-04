@@ -20,29 +20,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 
-/**
- * In-memory stand-in for the House Table adapter that reproduces the server's compare-and-swap
- * exactly, so concurrency can be asserted without a server and without sleeping.
- *
- * <p>The swap mirrors {@code UserTableVersionMapper.toVersion} on frozen House Table: a create
- * sends {@code INITIAL_VERSION} and only succeeds when the key is free, and a replace sends the
- * exact current metadata path and only succeeds when the stored pointer still equals it. Losers get
- * {@link HouseTableConcurrentUpdateException}, which is what a 409 maps to in the real adapter.
- *
- * <p>Several seams make otherwise-invisible protocol obligations observable:
- *
- * <ul>
- *   <li>{@link #getEvents()} is an ordered log of every call, including the token each swap
- *       carried, so "wrote the file before publishing" and "never re-read between capturing the
- *       base and swapping" can be asserted directly instead of inferred from final state;
- *   <li>{@link #setBeforeCas} installs a barrier for threaded races;
- *   <li>{@link #runOnceBeforeNextCas} lands a competing commit inside the window between a caller's
- *       candidate write and its swap, which is the only way to produce a genuine post-write swap
- *       failure deterministically and single-threaded;
- *   <li>the {@code failNext*} seams inject adapter-level failures so repository error translation
- *       can be tested in isolation from a race.
- * </ul>
- */
+/** So a transport error on the occupancy read cannot read as a free name. */
 public class InMemoryViewHouseTableRepository implements HouseTableRepository {
 
   public static final String FIND_ENTITY = "findEntityById";
@@ -79,10 +57,7 @@ public class InMemoryViewHouseTableRepository implements HouseTableRepository {
     this(Collections.synchronizedList(new ArrayList<>()));
   }
 
-  /**
-   * Shares one ordered log with the metadata codec, so "the file was written before the pointer
-   * moved" is a single totally-ordered sequence rather than two separately-observed facts.
-   */
+  /** Shared with the codec so write-before-publish is one ordered sequence, not two facts. */
   public InMemoryViewHouseTableRepository(List<String> events) {
     this.events = events;
   }
@@ -91,11 +66,7 @@ public class InMemoryViewHouseTableRepository implements HouseTableRepository {
     this.beforeCas = beforeCas;
   }
 
-  /**
-   * Runs {@code action} once, inside the next swap, after the caller has already written its
-   * candidate metadata file. A competing commit installed here makes that caller's captured base
-   * stale at exactly the moment it swaps.
-   */
+  /** Runs once inside the next swap, after the caller has written its candidate file. */
   public void runOnceBeforeNextCas(Runnable action) {
     beforeNextCas.set(action);
   }

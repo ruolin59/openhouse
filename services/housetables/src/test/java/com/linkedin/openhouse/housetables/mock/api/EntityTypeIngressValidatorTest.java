@@ -26,11 +26,7 @@ public class EntityTypeIngressValidatorTest {
         .build();
   }
 
-  /**
-   * Entity type is a required field of the contract, and every first-party client now sends it. The
-   * route still resolves an absent value rather than rejecting it, so this stays a stamp and never
-   * becomes a rejection.
-   */
+  /** The route resolves an absent value rather than rejecting it. */
   @ParameterizedTest
   @NullSource
   @ValueSource(strings = {"TABLE", "table", "TaBlE"})
@@ -47,12 +43,7 @@ public class EntityTypeIngressValidatorTest {
         "VIEW", validator.normalize(entity(declared), EntityType.VIEW).getEntityType());
   }
 
-  /**
-   * The defensive fallback, stated on its own rather than as one case of a parameterized set,
-   * because it is the behaviour the contract change deliberately keeps. Requiring the field made a
-   * missing value a client bug; it did not make it a request this server may refuse, since refusing
-   * would turn a stale caller into an outage instead of a silently corrected write.
-   */
+  /** Stated on its own because it is the behaviour the contract change deliberately keeps. */
   @ParameterizedTest
   @EnumSource(EntityType.class)
   public void testAbsentEntityTypeIsStillStampedFromTheRouteAsADefensiveFallback(

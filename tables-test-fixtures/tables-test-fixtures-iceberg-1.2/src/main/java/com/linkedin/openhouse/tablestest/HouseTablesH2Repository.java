@@ -122,14 +122,8 @@ public interface HouseTablesH2Repository extends HouseTableRepository {
     }
   }
 
-  /* ----------------------------------------------------------------------
-   * Typed view accessors.
-   *
-   * These carry default bodies because Spring Data derives a query from every
-   * abstract method name it sees, and none of these names is derivable. They
-   * also give the H2-backed fixture real in-memory view semantics, keyed off
-   * the entity type column, so a view row and a table row cannot be confused.
-   * -------------------------------------------------------------------- */
+  /* ---- Typed view accessors. Default bodies, because Spring Data derives a query from every
+   * abstract method name it sees and none of these is derivable. ---- */
 
   String ENTITY_TYPE_VIEW = "VIEW";
 
@@ -160,7 +154,7 @@ public interface HouseTablesH2Repository extends HouseTableRepository {
 
   @Override
   default HouseTable saveView(HouseTable houseTable) {
-    // House Table stamps the type from the route the write arrived on; mirror that here.
+    // Mirrors House Table stamping the type from the route.
     return this.save(houseTable.toBuilder().entityType(ENTITY_TYPE_VIEW).build());
   }
 

@@ -31,14 +31,7 @@ import org.apache.iceberg.view.ViewMetadata;
 import org.apache.iceberg.view.ViewMetadataParser;
 import org.springframework.test.util.ReflectionTestUtils;
 
-/**
- * Wires a view commit repository against real local storage and a real Iceberg parser, with only
- * the House Table hop replaced by an in-memory compare-and-swap.
- *
- * <p>Using the real {@link HadoopFileIO} and {@link ViewMetadataParser} is deliberate: the metadata
- * assertions in these tests are golden round-trips through Iceberg itself, so they catch a stamping
- * or version-assignment mistake that a mocked parser would hide.
- */
+/** Every metadata file under the storage root, candidates included. */
 @Getter
 public class ViewRepositoryHarness {
 
@@ -92,11 +85,7 @@ public class ViewRepositoryHarness {
     this.viewRepository = newRepositoryInstance();
   }
 
-  /**
-   * A brand-new repository over the same pointer rows and the same storage. Loading through this
-   * proves a result came from published state rather than from anything the previous instance kept
-   * in memory.
-   */
+  /** A new instance over the same rows and storage, so a load cannot come from process state. */
   public OpenHouseInternalViewRepository newRepositoryInstance() {
     return new OpenHouseInternalViewRepositoryImpl(
         houseTableRepository,

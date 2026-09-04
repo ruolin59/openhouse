@@ -23,18 +23,15 @@ public final class ViewTestFixtures {
   public static final String TRINO_DIALECT = "trino";
   public static final String LOCAL_STORAGE_TYPE = "local";
 
-  /** Exact text House Table stores in {@code entity_type} and exchanges on the wire. */
+  /** Exact text House Table stores and exchanges on the wire. */
   public static final String ENTITY_TYPE_VIEW = "VIEW";
 
   public static final String ENTITY_TYPE_TABLE = "TABLE";
 
-  /**
-   * Entity type the server does not recognize. A create colliding with one must fail closed, never
-   * be treated as a free name.
-   */
+  /** Unrecognized: a create colliding with one must fail closed. */
   public static final String ENTITY_TYPE_UNKNOWN = "MATERIALIZED_VIEW";
 
-  /** Key the top-level source dialect is recorded under, inside the current version summary. */
+  /** Recorded inside the current version summary. */
   public static final String SOURCE_DIALECT_SUMMARY_KEY = "sourceDialect";
 
   public static final String SQL_V1 = "SELECT id, name FROM viewdb.base_table";
@@ -49,7 +46,7 @@ public final class ViewTestFixtures {
         Types.NestedField.optional(2, "name", Types.StringType.get()));
   }
 
-  /** Materially different from {@link #schemaV1()}: an extra column, so no structural de-dup. */
+  /** Materially different from {@link #schemaV1()}, so no structural de-dup. */
   public static Schema schemaV2() {
     return new Schema(
         Types.NestedField.required(1, "id", Types.LongType.get()),
@@ -117,7 +114,7 @@ public final class ViewTestFixtures {
     return row(ENTITY_TYPE_TABLE, metadataLocation);
   }
 
-  /** A row written before the discriminator column existed: null entity type means TABLE. */
+  /** Written before the discriminator existed: null means TABLE. */
   public static HouseTable legacyRow(String metadataLocation) {
     return row(null, metadataLocation);
   }

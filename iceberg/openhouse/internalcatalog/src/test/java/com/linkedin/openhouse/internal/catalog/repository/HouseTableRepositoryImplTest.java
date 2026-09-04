@@ -128,9 +128,7 @@ public class HouseTableRepositoryImplTest {
   }
 
   /**
-   * The server outlives a single test method, so a queued response or a recorded request left by
-   * one test would otherwise be handed to the next. Resetting both keeps request-level assertions
-   * honest regardless of the order tests run in.
+   * The server outlives a method, so a leftover response or request would leak to the next test.
    */
   @AfterEach
   void resetMockServerState() throws InterruptedException {
@@ -185,11 +183,7 @@ public class HouseTableRepositoryImplTest {
     Assertions.assertEquals(result.getStorageType(), HOUSE_TABLE.getStorageType());
   }
 
-  /**
-   * Entity type is a required field of the House Table contract, so the table write declares TABLE
-   * rather than leaving the route to infer it. The route-side stamp remains as a defensive
-   * fallback, but a client that relies on it is out of contract.
-   */
+  /** Entity type is required by the contract, so the table write declares TABLE. */
   @Test
   public void testRepoSaveDeclaresTheTableEntityTypeOnTheOutgoingBody()
       throws InterruptedException {

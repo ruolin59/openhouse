@@ -13,11 +13,7 @@ public class IcebergViewMetadataCodec implements ViewMetadataCodec {
     return ViewMetadataParser.read(inputFile);
   }
 
-  /**
-   * Writes to a path that does not exist yet. Every commit picks a fresh file name, so a create
-   * (rather than an overwrite) is what we want: it makes an accidental collision fail loudly
-   * instead of silently replacing a metadata file another commit may already be pointing at.
-   */
+  /** Create, not overwrite: a colliding file name must fail loudly rather than replace. */
   @Override
   public void write(ViewMetadata metadata, OutputFile outputFile) {
     ViewMetadataParser.write(metadata, outputFile);

@@ -15,11 +15,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 
 /**
- * Typed list and typed drop over a key space that genuinely holds both kinds of entity.
- *
- * <p>Views and tables share one House Table key space, so "typed" only means something if a mixed
- * population is present. Every earlier list/drop test either mocked an already-filtered page or
- * seeded views only, which cannot distinguish a typed route from an untyped one.
+ * Typed list and drop over a key space holding both kinds of entity. Views and tables share one key
+ * space, so a filtered page or a views-only fixture cannot tell a typed route from an untyped one.
  */
 public class OpenHouseInternalViewRepositoryMixedEntityTest {
 
@@ -88,7 +85,7 @@ public class OpenHouseInternalViewRepositoryMixedEntityTest {
         row("legacy_a", null), harness.getHouseTableRepository().peek(DB, "legacy_a").get());
   }
 
-  /** A table is not a view; the typed drop must decline rather than delete the wrong entity. */
+  /** The typed drop must decline rather than delete the wrong entity. */
   @Test
   void droppingATableThroughTheViewPathReportsFalseAndDeletesNothing() {
     Assertions.assertFalse(harness.getViewRepository().dropView(DB, "table_a"));
@@ -97,7 +94,7 @@ public class OpenHouseInternalViewRepositoryMixedEntityTest {
         row("table_a", "TABLE"), harness.getHouseTableRepository().peek(DB, "table_a").get());
   }
 
-  /** A legacy row has no discriminator and means TABLE, so it is equally out of reach. */
+  /** A legacy row means TABLE, so it is equally out of reach. */
   @Test
   void droppingALegacyRowThroughTheViewPathReportsFalseAndDeletesNothing() {
     Assertions.assertFalse(harness.getViewRepository().dropView(DB, "legacy_a"));
@@ -106,7 +103,7 @@ public class OpenHouseInternalViewRepositoryMixedEntityTest {
         row("legacy_a", null), harness.getHouseTableRepository().peek(DB, "legacy_a").get());
   }
 
-  /** Loading a table through the view path is a miss, not a mis-typed success. */
+  /** A miss, not a mis-typed success. */
   @Test
   void loadingATableThroughTheViewPathIsNoSuchView() {
     Assertions.assertThrows(

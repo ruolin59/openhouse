@@ -129,9 +129,8 @@ public class OpenHouseInternalTableOperations extends BaseMetastoreTableOperatio
           String.format(
               "Cannot find table %s after refresh, maybe another process deleted it", tableName()));
     }
-    // Defense in depth. The table read is already typed on the server, so a non-table should never
-    // arrive here; if one ever did, view metadata is a different document and handing it to
-    // TableMetadataParser would fail unhelpfully at best. Reject before the metadata load.
+    // Defence in depth: the table read is already typed, but view metadata is a different
+    // document and must never reach TableMetadataParser.
     houseTable
         .filter(row -> !isTableEntity(row))
         .ifPresent(
@@ -143,11 +142,7 @@ public class OpenHouseInternalTableOperations extends BaseMetastoreTableOperatio
     refreshMetadata(houseTable.map(HouseTable::getTableLocation).orElse(null));
   }
 
-  /**
-   * Only a legacy row, which carries no discriminator at all, means TABLE by default. Every other
-   * value must be exactly the canonical constant House Table writes; a differently-cased value is a
-   * corrupted row and is not ours to parse.
-   */
+  /** Only a legacy row, with no discriminator at all, defaults to TABLE. */
   private static boolean isTableEntity(HouseTable houseTable) {
     String entityType = houseTable.getEntityType();
     return entityType == null || CatalogConstants.ENTITY_TYPE_TABLE.equals(entityType);

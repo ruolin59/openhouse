@@ -7,13 +7,16 @@ import com.linkedin.openhouse.cluster.storage.local.LocalStorage;
 import com.linkedin.openhouse.housetables.client.api.ToggleStatusApi;
 import com.linkedin.openhouse.housetables.client.api.UserTableApi;
 import com.linkedin.openhouse.housetables.client.invoker.ApiClient;
-import com.linkedin.openhouse.housetables.client.model.UserTable;
 import com.linkedin.openhouse.internal.catalog.fileio.FileIOManager;
 import com.linkedin.openhouse.internal.catalog.model.HouseTable;
 import com.linkedin.openhouse.internal.catalog.repository.HouseTableRepository;
 import com.linkedin.openhouse.internal.catalog.repository.HouseTableRepositoryImpl;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.Schema;
+import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.hadoop.HadoopFileIO;
+import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -59,32 +62,6 @@ public class HouseTableMapperTest {
   @Autowired FileIOManager fileIOManager;
 
   /**
-   * The discriminator is required now, but {@code tableVersion} and {@code storageType} are not,
-   * and MapStruct routes every String property through the same helper. A read that legitimately
-   * omits those two must still map, with the nulls carried through rather than turned into a
-   * failure.
-   */
-  @Test
-  public void toHouseTableMapsARowWhoseOptionalStringFieldsAreAbsent() {
-    UserTable userTable = new UserTable();
-    userTable.setDatabaseId("d1");
-    userTable.setTableId("t1");
-    userTable.setMetadataLocation("/openhouse/d1/t1/v0.metadata.json");
-    userTable.setEntityType("TABLE");
-    userTable.setTableVersion(null);
-    userTable.setStorageType(null);
-
-    HouseTable houseTable = houseTableMapper.toHouseTable(userTable);
-
-    Assertions.assertEquals("TABLE", houseTable.getEntityType());
-    Assertions.assertEquals("d1", houseTable.getDatabaseId());
-    Assertions.assertEquals("t1", houseTable.getTableId());
-    Assertions.assertEquals("/openhouse/d1/t1/v0.metadata.json", houseTable.getTableLocation());
-    Assertions.assertNull(houseTable.getTableVersion());
-    Assertions.assertNull(houseTable.getStorageType());
-  }
-
-  /**
    * The shared outgoing mapping is the table write path, so it declares TABLE; the view write path
    * gets its own mapping so neither caller can inherit the wrong discriminator by omission.
    */
@@ -108,17 +85,58 @@ public class HouseTableMapperTest {
         "INITIAL_VERSION", houseTableMapper.toUserView(pointer).getTableVersion());
   }
 
-  @Test
-  public void simpleMapperTest() {
+  private HadoopFileIO localFileIO() {
     HadoopFileIO fileIO = new HadoopFileIO(new Configuration());
     LocalStorage localStorage = mock(LocalStorage.class);
     when(fileIOManager.getStorage(fileIO)).thenReturn(localStorage);
     when(localStorage.getType()).thenReturn(StorageType.LOCAL);
+    return fileIO;
+  }
+
+  /**
+   * This overload takes fields already stripped to their bare names, so it copies values verbatim.
+   * The namespace belongs to the key, and a value that merely looks like one is still just a value.
+   */
+  @Test
+  public void simpleMapperTest() {
+    HadoopFileIO fileIO = localFileIO();
+
     HouseTable houseTable =
         houseTableMapper.toHouseTable(
             ImmutableMap.of("databaseId", "openhouse.database", "tableId", "table"), fileIO);
-    Assertions.assertEquals("database", houseTable.getDatabaseId());
+
+    Assertions.assertEquals("openhouse.database", houseTable.getDatabaseId());
     Assertions.assertEquals("table", houseTable.getTableId());
     Assertions.assertEquals("local", houseTable.getStorageType());
+  }
+
+  /**
+   * Stripping happens on the way in from table metadata, where the server-owned fields are
+   * namespaced keys among the caller's own properties, and everything unrecognized is left behind.
+   */
+  @Test
+  public void toHouseTableStripsTheNamespaceFromMetadataKeysAndIgnoresForeignOnes() {
+    HadoopFileIO fileIO = localFileIO();
+    TableMetadata metadata =
+        TableMetadata.newTableMetadata(
+            new Schema(Types.NestedField.required(1, "id", Types.LongType.get())),
+            PartitionSpec.unpartitioned(),
+            "/tmp/openhouse/db/tbl",
+            ImmutableMap.of(
+                "openhouse.databaseId", "db",
+                "openhouse.tableId", "tbl",
+                "openhouse.tableVersion", "INITIAL_VERSION",
+                "openhouse.entityType", "TABLE",
+                "user.owner", "team-a"));
+
+    HouseTable houseTable = houseTableMapper.toHouseTable(metadata, fileIO);
+
+    Assertions.assertEquals("db", houseTable.getDatabaseId());
+    Assertions.assertEquals("tbl", houseTable.getTableId());
+    Assertions.assertEquals("INITIAL_VERSION", houseTable.getTableVersion());
+    Assertions.assertEquals("TABLE", houseTable.getEntityType());
+    Assertions.assertEquals("local", houseTable.getStorageType());
+    Assertions.assertNull(
+        houseTable.getTableUUID(), "an un-namespaced property is not an HTS field");
   }
 }

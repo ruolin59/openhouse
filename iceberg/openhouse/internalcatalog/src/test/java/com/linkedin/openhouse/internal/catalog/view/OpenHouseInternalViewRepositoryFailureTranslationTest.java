@@ -20,11 +20,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * How adapter failures become caller-meaningful repository outcomes (§8).
- *
- * <p>These are deliberately separate from the race tests: a race proves the swap arbitrates, while
- * these prove the translation is right even when the failure is injected directly, and that a
- * failure never triggers a second write, a re-read, or a rebuild.
+ * How adapter failures become caller-meaningful outcomes. Separate from the race tests: these
+ * inject the failure directly and prove no failure triggers a second write, a re-read, or a
+ * rebuild.
  */
 public class OpenHouseInternalViewRepositoryFailureTranslationTest {
 
@@ -44,10 +42,7 @@ public class OpenHouseInternalViewRepositoryFailureTranslationTest {
     return new HouseTableConcurrentUpdateException("", new RuntimeException("409"));
   }
 
-  /**
-   * An ambiguous publish may or may not have landed. Reporting failure would invite a retry that
-   * double-applies, so the caller has to be told the state is unknown.
-   */
+  /** It may have landed, so reporting failure would invite a double-applying retry. */
   @Test
   void ambiguousPublishOnCreateBecomesCommitStateUnknown() {
     harness.getHouseTableRepository().failNextSaveViewWith(unknownState());
@@ -148,10 +143,7 @@ public class OpenHouseInternalViewRepositoryFailureTranslationTest {
         "an ambiguous delete must not be retried");
   }
 
-  /**
-   * The neutral occupancy read is advisory, but a transport failure is not evidence that the name
-   * is free. Treating it as free would let a create clobber a live entity.
-   */
+  /** A transport failure is not evidence the name is free. */
   @Test
   void transportFailureOnTheOccupancyReadNeverReadsAsAFreeName() {
     harness.getHouseTableRepository().failNextFindEntityWith(unknownState());
@@ -168,11 +160,7 @@ public class OpenHouseInternalViewRepositoryFailureTranslationTest {
     Assertions.assertFalse(harness.getHouseTableRepository().peek(DB, VIEW).isPresent());
   }
 
-  /**
-   * Everything after the single publish attempt has to be silence: no re-read to discover what
-   * happened, no rebuild, and no second publish. Any of those would either double-apply or turn an
-   * unknown outcome into a confidently wrong one.
-   */
+  /** Everything after the single publish must be silence: a re-read would guess at the outcome. */
   private void assertNothingHappenedAfterThePublishAttempt() {
     List<String> events = harness.getHouseTableRepository().getEvents();
     int lastSave = -1;

@@ -55,11 +55,8 @@ import org.springframework.util.ReflectionUtils;
 import reactor.core.publisher.Mono;
 
 /**
- * Wire-level behavior of the typed view adapters against a mock House Table server.
- *
- * <p>The point of driving a real server rather than stubbing the generated client is that the whole
- * generated code path executes, so a wrong route, a wrong verb, or a body that leaks entity type
- * fails here instead of in production.
+ * Wire-level behaviour of the typed view adapters. Driving a real server rather than stubbing the
+ * generated client means a wrong route, verb, or body fails here instead of in production.
  */
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 @SpringBootTest
@@ -115,11 +112,7 @@ public class HouseTableViewRepositoryImplTest {
     mockHtsServer.shutdown();
   }
 
-  /**
-   * The server outlives a single test method, so a test whose call never reaches the wire would
-   * otherwise hand its queued response to the next test. Swapping in a fresh dispatcher empties the
-   * response queue, and draining the recorded requests keeps request assertions honest.
-   */
+  /** The server outlives a method, so a queued response would otherwise leak to the next test. */
   @AfterEach
   void resetMockServerState() throws InterruptedException {
     mockHtsServer.setDispatcher(new QueueDispatcher());
@@ -195,9 +188,7 @@ public class HouseTableViewRepositoryImplTest {
   }
 
   /**
-   * House Table resolves a legacy row's absent column to TABLE before it ever reaches the wire, so
-   * the neutral read only ever sees a canonical discriminator and must map it faithfully. TABLE is
-   * pinned here and VIEW above, which is the whole vocabulary.
+   * House Table resolves a legacy null to TABLE before the wire, so only canonical values arrive.
    */
   @Test
   public void findEntityByIdMapsTheCanonicalTableDiscriminator() throws InterruptedException {
@@ -227,7 +218,7 @@ public class HouseTableViewRepositoryImplTest {
     Assertions.assertEquals("local", found.get().getStorageType());
   }
 
-  /** House Table answers a typed lookup for a missing view with 404, which reads as absent. */
+  /** A 404 on a typed lookup reads as absent. */
   @Test
   public void findViewByIdTreatsNotFoundAsAbsent() {
     enqueueStatus(404);
@@ -279,11 +270,7 @@ public class HouseTableViewRepositoryImplTest {
         page.getContent().stream().allMatch(row -> "VIEW".equals(row.getEntityType())));
   }
 
-  /**
-   * The view write goes to the typed route and says what it is writing. Entity type is a required
-   * field of the House Table contract now, so leaving it for the route to infer would put this
-   * client out of contract; the route-side stamp survives only as a defensive fallback.
-   */
+  /** Entity type is required by the contract, so this client states it rather than inferring. */
   @Test
   public void saveViewPutsToTheTypedViewRouteDeclaringTheViewEntityType()
       throws InterruptedException {
@@ -324,7 +311,7 @@ public class HouseTableViewRepositoryImplTest {
     assertThat(request.getPath()).contains("tableId=" + VIEW_ID);
   }
 
-  /** Views are hard deleted, so no soft-delete flag is ever negotiated on the wire. */
+  /** Views are hard deleted, so no soft-delete flag is negotiated. */
   @Test
   public void deleteViewByIdReportsFalseWhenTheViewIsNotThere() {
     enqueueStatus(404);
@@ -336,10 +323,7 @@ public class HouseTableViewRepositoryImplTest {
    * One write, no blind retry.
    * ---------------------------------------------------------------------- */
 
-  /**
-   * A 5xx leaves the outcome genuinely unknown. Retrying could double-apply, so the adapter sends
-   * once and reports unknown state; the caller turns that into a commit-state-unknown result.
-   */
+  /** Retrying could double-apply, so the adapter sends once and reports unknown state. */
   @Test
   public void saveViewSendsExactlyOneRequestPerAmbiguousServerError() throws InterruptedException {
     for (int code : Arrays.asList(500, 504)) {
@@ -365,10 +349,7 @@ public class HouseTableViewRepositoryImplTest {
     }
   }
 
-  /**
-   * The request left this process before the connection died, so the server may well have applied
-   * it. That is unknown state, not a failure that can be retried.
-   */
+  /** The request left this process before the connection died, so the outcome is unknown. */
   @Test
   public void saveViewReportsUnknownStateWhenTheConnectionDiesAfterTheRequestIsSent()
       throws InterruptedException {
@@ -393,11 +374,7 @@ public class HouseTableViewRepositoryImplTest {
     Assertions.assertEquals(0, retryListener.getRetryCount());
   }
 
-  /**
-   * A block timeout is what {@code Mono.block(Duration)} throws when the write outlives its budget.
-   * The request is already in flight, so this is unknown state too. The failure is injected on the
-   * client rather than delayed on the server so the assertion costs nothing in wall-clock time.
-   */
+  /** Injected client-side rather than delayed server-side, so the assertion costs no wall time. */
   @Test
   public void saveViewReportsUnknownStateOnABlockTimeout() {
     Mockito.doReturn(
@@ -418,7 +395,7 @@ public class HouseTableViewRepositoryImplTest {
     Assertions.assertEquals(0, retryListener.getRetryCount());
   }
 
-  /** A losing compare-and-swap is reported as a conflict, and never retried into a second write. */
+  /** A losing swap is a conflict, never retried into a second write. */
   @Test
   public void saveViewSurfacesConflictWithoutRetrying() throws InterruptedException {
     enqueueStatus(409);
@@ -435,7 +412,7 @@ public class HouseTableViewRepositoryImplTest {
     Assertions.assertEquals(0, retryListener.getRetryCount());
   }
 
-  /** Caller-side failures keep their classification so the later layer can preserve the status. */
+  /** Caller failures keep their classification so the later layer can preserve status. */
   @Test
   public void saveViewPreservesCallerFailuresWithoutRetrying() throws InterruptedException {
     for (int code : Arrays.asList(400, 401, 403, 429)) {
@@ -465,11 +442,7 @@ public class HouseTableViewRepositoryImplTest {
     Mockito.verify(userTableApi, Mockito.times(1)).putUserView(Mockito.any());
   }
 
-  /**
-   * An empty completion is a success signal that carries nothing. It never reaches the error
-   * handler, so without an explicit guard the adapter would return null and the caller would fail
-   * later with an NPE for a mutation House Table may well have applied.
-   */
+  /** An empty success signal never reaches the error handler, so the guard has to catch it. */
   @Test
   public void saveViewReportsUnknownStateWhenThePublisherCompletesEmpty() {
     Mockito.doReturn(Mono.empty()).when(userTableApi).putUserView(Mockito.any());
@@ -479,14 +452,17 @@ public class HouseTableViewRepositoryImplTest {
         .getHtsRetryTemplate(Collections.singletonList(IllegalStateException.class))
         .registerListener(retryListener);
 
-    Assertions.assertThrows(
-        HouseTableRepositoryStateUnknownException.class, () -> htsRepo.saveView(viewPointer()));
+    HouseTableRepositoryStateUnknownException thrown =
+        Assertions.assertThrows(
+            HouseTableRepositoryStateUnknownException.class, () -> htsRepo.saveView(viewPointer()));
+    Assertions.assertEquals(
+        "HTS accepted the view write but returned no entity", thrown.getMessage());
 
     Mockito.verify(userTableApi, Mockito.times(1)).putUserView(Mockito.any());
     Assertions.assertEquals(0, retryListener.getRetryCount());
   }
 
-  /** A 200 whose body carries no entity is the same ambiguity arriving over the wire. */
+  /** A 200 whose body carries no entity: the null routes through the mutation error handler. */
   @Test
   public void saveViewReportsUnknownStateWhenTheResponseCarriesNoEntity()
       throws InterruptedException {
@@ -526,10 +502,7 @@ public class HouseTableViewRepositoryImplTest {
             .addHeader("Content-Type", "application/json"));
   }
 
-  /**
-   * A transient server error on a read is safe to repeat, so the list must actually engage the
-   * bounded retry rather than surfacing the raw web-client failure on the first attempt.
-   */
+  /** A read is safe to repeat, so the list must engage the bounded retry, not escape raw. */
   @Test
   public void findAllViewsByDatabaseIdRetriesATransientServerErrorAndThenSucceeds()
       throws InterruptedException {
@@ -553,7 +526,7 @@ public class HouseTableViewRepositoryImplTest {
     Assertions.assertNull(mockHtsServer.takeRequest(1, TimeUnit.SECONDS));
   }
 
-  /** The retry is bounded: once the attempts are used up the classified failure is reported. */
+  /** Bounded: once the attempts are used up the classified failure is reported. */
   @Test
   public void findAllViewsByDatabaseIdStopsAfterTheConfiguredNumberOfAttempts()
       throws InterruptedException {
@@ -651,11 +624,7 @@ public class HouseTableViewRepositoryImplTest {
     Assertions.assertEquals(0, retryListener.getRetryCount());
   }
 
-  /**
-   * A classified caller failure on the delete route keeps its classification and is sent once, for
-   * the same reason as the write: the later layer has to be able to preserve the status, and a
-   * retry of a mutation is never safe here.
-   */
+  /** Same reasoning as the write: a mutation retry is never safe. */
   @Test
   public void deleteViewByIdPreservesCallerFailuresWithoutRetrying() throws InterruptedException {
     for (int code : Arrays.asList(400, 401, 403, 429)) {
@@ -682,7 +651,7 @@ public class HouseTableViewRepositoryImplTest {
     }
   }
 
-  /** A typed delete never negotiates the soft-delete flag the table route carries. */
+  /** A typed delete never negotiates the table route's soft-delete flag. */
   @Test
   public void deleteViewByIdNeverTouchesTheTableDeleteRoutes() throws InterruptedException {
     enqueueStatus(204);
@@ -701,7 +670,7 @@ public class HouseTableViewRepositoryImplTest {
    * Reads keep the existing bounded retry.
    * ---------------------------------------------------------------------- */
 
-  /** Reads are safe to repeat, so the typed view read keeps the shared bounded retry. */
+  /** Reads are safe to repeat, so the typed read keeps the shared bounded retry. */
   @Test
   public void findViewByIdRetriesTransientServerErrorsUpToTheConfiguredBound() {
     enqueueStatus(504);
@@ -720,7 +689,7 @@ public class HouseTableViewRepositoryImplTest {
     Assertions.assertEquals(HtsRetryUtils.MAX_RETRY_ATTEMPT, retryListener.getRetryCount());
   }
 
-  /** The neutral occupancy read is a read too, and gets the same bounded retry. */
+  /** The occupancy read is a read too, and gets the same bounded retry. */
   @Test
   public void findEntityByIdRetriesTransientServerErrors() {
     enqueueStatus(503);
@@ -740,7 +709,7 @@ public class HouseTableViewRepositoryImplTest {
     Assertions.assertEquals(1, retryListener.getRetryCount());
   }
 
-  /** The typed view read never resolves a table pointer, so a view drop cannot hit a table. */
+  /** The typed read never resolves a table pointer. */
   @Test
   public void tablePointersRemainReachableOnlyThroughTheTableRoutes() throws InterruptedException {
     enqueueEntity(200, houseTableMapper.toUserTable(HOUSE_TABLE));

@@ -10,13 +10,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Registers the view commit repository and its parser seam, and only when the runtime actually
- * supplies the Iceberg view API.
- *
- * <p>The string form of {@link ConditionalOnClass} is required: it lets Spring evaluate the
- * condition from class metadata without resolving {@code org.apache.iceberg.view.ViewMetadata},
- * which is absent under Iceberg 1.2. Neither bean below may be an unconditional {@code @Component},
- * or the 1.2 fixture's component scan would fail during introspection.
+ * Registers the view repository and codec only when the Iceberg view API is present. The string
+ * form of {@link ConditionalOnClass} is required so Spring can evaluate it without resolving a type
+ * that is absent under Iceberg 1.2.
  */
 @Configuration
 @ConditionalOnClass(name = "org.apache.iceberg.view.ViewMetadata")

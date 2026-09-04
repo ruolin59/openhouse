@@ -40,12 +40,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Create and replace behavior of the view commit repository: collision classification, UUID
- * stability, Iceberg-owned version identity, no-op detection, dialect safety, and the exact
- * properties stamped into the metadata file.
- *
- * <p>All metadata assertions are golden round-trips: the file is written by the repository and read
- * back through the real Iceberg parser.
+ * Create and replace: collision classification, UUID stability, Iceberg-owned version identity,
+ * no-op detection, dialect safety, stamping. Every metadata assertion is a golden round trip.
  */
 public class OpenHouseInternalViewRepositoryCommitTest {
 
@@ -56,11 +52,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     harness = new ViewRepositoryHarness(tempDir);
   }
 
-  /* -------------------------------------------------------------------------
-   * Create collision classification. The occupancy read is advisory, but it is
-   * what turns a collision into an actionable error, so every occupant shape has
-   * to be classified and none may leave a side effect behind.
-   * ---------------------------------------------------------------------- */
+  /* ---- Create collision classification: every occupant shape, no side effects. ---- */
 
   @Test
   void createCollidingWithAnExistingViewReportsViewAlreadyExists() {
@@ -92,10 +84,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     assertCreateCollisionLeftNoTrace();
   }
 
-  /**
-   * A row predating the discriminator column carries no entity type and means TABLE, per the House
-   * Table {@code EntityType} contract. It must classify as a table collision, not as a free name.
-   */
+  /** A row predating the discriminator means TABLE, not a free name. */
   @Test
   void createCollidingWithALegacyRowReportsNameOccupiedAsTable() {
     harness
@@ -111,7 +100,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     assertCreateCollisionLeftNoTrace();
   }
 
-  /** An entity type this build does not know about must fail closed, preserving the raw value. */
+  /** An unknown type must fail closed, preserving the raw value. */
   @Test
   void createCollidingWithAnUnknownEntityTypeFailsClosed() {
     harness
@@ -129,7 +118,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     assertCreateCollisionLeftNoTrace();
   }
 
-  /** A non-canonical spelling is not a recognized type, so the name is occupied by something. */
+  /** A non-canonical spelling is not a recognized type, so something occupies the name. */
   @Test
   void createCollidingWithANonCanonicalDiscriminatorFailsClosed() {
     harness
@@ -169,14 +158,9 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     Assertions.assertTrue(harness.metadataFiles().isEmpty());
   }
 
-  /* -------------------------------------------------------------------------
-   * UUID identity.
-   * ---------------------------------------------------------------------- */
+  /* ---- UUID identity. ---- */
 
-  /**
-   * The Iceberg view UUID and the OpenHouse table UUID are the same identity; the allocated
-   * directory embeds it, and a replace must not mint a new one.
-   */
+  /** One identity: the allocated directory embeds it and a replace must not mint a new one. */
   @Test
   void uuidIsAssignedOnceEmbeddedInTheLocationAndPreservedAcrossReplace() {
     ViewCommitResult created = harness.getViewRepository().commit(ViewTestFixtures.createIntent());
@@ -213,7 +197,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
         replacedMetadata.properties().get(CatalogConstants.OPENHOUSE_UUID_KEY));
   }
 
-  /** Server-owned properties are authoritative: a caller cannot smuggle one in. */
+  /** Server-owned properties are authoritative. */
   @Test
   void callerSuppliedReservedPropertyIsRejectedBeforeAnythingIsWritten() {
     Map<String, String> hostile = new LinkedHashMap<>();
@@ -233,15 +217,9 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     Assertions.assertTrue(harness.metadataFiles().isEmpty());
   }
 
-  /* -------------------------------------------------------------------------
-   * Version identity is Iceberg's, not OpenHouse's.
-   * ---------------------------------------------------------------------- */
+  /* ---- Version identity is Iceberg's, not OpenHouse's. ---- */
 
-  /**
-   * Every step below is a materially different definition, so Iceberg cannot de-duplicate it. The
-   * assertions read the resulting metadata only: no submitted candidate id and no {@code max+1}
-   * arithmetic of our own appears anywhere.
-   */
+  /** Materially different steps, asserting only resulting metadata: no candidate id, no max+1. */
   @Test
   void versionIdsAndHistoryAreAssignedByIcebergAcrossMateriallyDifferentDefinitions() {
     ViewCommitResult created = harness.getViewRepository().commit(ViewTestFixtures.createIntent());
@@ -297,15 +275,9 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     Assertions.assertTrue(historyIds.contains(afterSecond.currentVersionId()));
   }
 
-  /* -------------------------------------------------------------------------
-   * No-op detection.
-   * ---------------------------------------------------------------------- */
+  /* ---- No-op detection. ---- */
 
-  /**
-   * Replacing a view with the definition it already has changes nothing observable, so it must not
-   * write a metadata file, must not move the pointer, and must not bump last-modified time. Only
-   * the candidate timestamp and summary differ between the two submissions.
-   */
+  /** Only the candidate timestamp and summary differ, so nothing observable changes. */
   @Test
   void identicalDefinitionReplaceIsANoOpThatWritesNothing() {
     ViewCommitResult created = harness.getViewRepository().commit(ViewTestFixtures.createIntent());
@@ -340,10 +312,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     Assertions.assertEquals(afterCreate.history().size(), unchanged.history().size());
   }
 
-  /**
-   * A property-only change is persisted state even when Iceberg legitimately reuses the current
-   * version id, so it is a real commit and must write and publish.
-   */
+  /** Persisted state changes even when Iceberg reuses the version id. */
   @Test
   void propertyOnlyReplaceStillWritesAndPublishes() {
     ViewCommitResult created = harness.getViewRepository().commit(ViewTestFixtures.createIntent());
@@ -370,7 +339,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     Assertions.assertEquals("2", metadata.properties().get("a"));
   }
 
-  /** User properties the caller omits survive; supplied ones win. */
+  /** Omitted properties survive; supplied ones win. */
   @Test
   void replacePreservesOmittedUserPropertiesAndMergesSuppliedOnes() {
     Map<String, String> initial = new LinkedHashMap<>();
@@ -396,15 +365,8 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     Assertions.assertEquals("yes", properties.get("keep"));
   }
 
-  /* -------------------------------------------------------------------------
-   * Bounding the no-op comparison.
-   *
-   * Iceberg 1.5.2.21 will not de-duplicate these for us: sameViewVersion compares
-   * the whole summary map, and the repository stamps a differing summary, so every
-   * resubmission looks new to Iceberg. The repository therefore owns a normalized
-   * structural comparison, and each field below is part of it. One field changes
-   * per test so an under-comparing implementation cannot hide behind another field.
-   * ---------------------------------------------------------------------- */
+  /* ---- Bounding the repository-owned structural comparison: one field changes per test, so an
+   * under-comparing implementation cannot hide behind another field. ---- */
 
   private static final List<SqlViewRepresentationIntent> BOTH_DIALECTS_V1 =
       ViewTestFixtures.sparkAndTrino(ViewTestFixtures.SQL_V1);
@@ -425,10 +387,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
         .commit(ViewTestFixtures.baseIntent().representations(BOTH_DIALECTS_V1).build());
   }
 
-  /**
-   * Runs a replace that differs from the created view in exactly one structural field and requires
-   * it to be treated as a real change.
-   */
+  /** A replace differing in exactly one structural field must be a real change. */
   private void assertStructuralChangeIsNotANoOp(
       java.util.function.UnaryOperator<ViewCommitIntent.ViewCommitIntentBuilder> mutation,
       String changedField) {
@@ -476,7 +435,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
         "SQL text");
   }
 
-  /** Only one representation's SQL changes, so a whole-set-only comparison would miss it. */
+  /** Only one representation's SQL changes, so a whole-set comparison would miss it. */
   @Test
   void changedSqlInASingleRepresentationIsNotANoOp() {
     assertStructuralChangeIsNotANoOp(
@@ -488,7 +447,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
         "SQL of one representation");
   }
 
-  /** Adding a dialect is allowed and is a real change; only dropping one is rejected. */
+  /** Adding a dialect is allowed; only dropping one is rejected. */
   @Test
   void anAddedRepresentationDialectIsNotANoOp() {
     List<SqlViewRepresentationIntent> withPresto = new java.util.ArrayList<>(BOTH_DIALECTS_V1);
@@ -515,10 +474,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
         builder -> builder.defaultNamespace(Namespace.of("other_db")), "default namespace");
   }
 
-  /**
-   * Identifier fields are part of the schema but not of its struct, so a comparison that only looks
-   * at columns reports "nothing changed" and drops the caller's edit on the floor.
-   */
+  /** Identifier fields are in the schema but not the struct, so a column-only check misses them. */
   @Test
   void aChangedIdentifierFieldSetIsNotANoOp() {
     Schema withoutIdentifier =
@@ -566,11 +522,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
             .identifierFieldIds());
   }
 
-  /**
-   * Reducing representations to a map keyed by dialect keeps only the last entry, so a submission
-   * that repeats a dialect could compare equal to the stored definition and be answered as a no-op
-   * — which would also skip the validation that rejects two queries for one dialect.
-   */
+  /** A map keyed by dialect keeps only the last entry, so a repeat could compare equal. */
   @Test
   void aDuplicateDialectSubmissionIsRejectedRatherThanTreatedAsANoOp() {
     ViewCommitResult created = harness.getViewRepository().commit(ViewTestFixtures.createIntent());
@@ -597,7 +549,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
         harness.getHouseTableRepository().peek(DB, VIEW).get().getTableLocation());
   }
 
-  /** Iceberg compares dialects case-insensitively, so the duplicate check has to as well. */
+  /** Iceberg compares dialects case-insensitively, so this check must too. */
   @Test
   void aDuplicateDialectDifferingOnlyInCaseIsAlsoRejected() {
     Assertions.assertThrows(
@@ -618,10 +570,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     Assertions.assertTrue(harness.metadataFiles().isEmpty());
   }
 
-  /**
-   * A changed commit has to be observably newer than what it replaced. With the clock pinned, the
-   * only thing that can make that true is the repository's own monotonic guard.
-   */
+  /** With the clock pinned, only the repository's monotonic guard can make this true. */
   @Test
   void aChangedReplaceAdvancesLastModifiedEvenWhenTheClockDoesNot() {
     long fixedNow = 1_700_000_000_000L;
@@ -669,15 +618,9 @@ public class OpenHouseInternalViewRepositoryCommitTest {
         "creation time still belongs to the create");
   }
 
-  /* -------------------------------------------------------------------------
-   * Dialect safety.
-   * ---------------------------------------------------------------------- */
+  /* ---- Dialect safety. ---- */
 
-  /**
-   * The server stamps {@code replace.drop-dialect.allowed=false}, so a replacement that silently
-   * drops a dialect an engine still reads is rejected by Iceberg itself, before any file is
-   * written.
-   */
+  /** The server stamps {@code replace.drop-dialect.allowed=false}; Iceberg enforces it. */
   @Test
   void replaceDroppingAPreviouslyStoredDialectIsRejected() {
     ViewCommitResult created =
@@ -723,7 +666,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
         harness.getHouseTableRepository().peek(DB, VIEW).get().getTableLocation());
   }
 
-  /** A caller cannot re-enable dialect dropping through view properties. */
+  /** A caller cannot re-enable dialect dropping. */
   @Test
   void callerCannotOverrideTheDropDialectGuard() {
     Map<String, String> hostile = new HashMap<>();
@@ -740,15 +683,11 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     Assertions.assertTrue(harness.metadataFiles().isEmpty());
   }
 
-  /* -------------------------------------------------------------------------
-   * Stamping golden round-trip.
-   * ---------------------------------------------------------------------- */
+  /* ---- Stamping golden round-trip. ---- */
 
   /**
-   * The exact server-owned property set, read back through the real parser. The {@code
-   * openhouse.table*} namespace is reused for views on purpose, because House Table stores an
-   * entity-neutral pointer; entity type is never stamped into metadata, because House Table sets it
-   * from the route the write arrived on.
+   * The {@code openhouse.table*} namespace is reused for views on purpose: House Table stores an
+   * entity-neutral pointer. Entity type is never stamped into metadata; it belongs to the row.
    */
   @Test
   void createStampsInitialVersionAndReplaceStampsThePriorExactPath() {
@@ -839,11 +778,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
         replacedProperties.get(getCanonicalFieldName("lastModifiedTime")));
   }
 
-  /**
-   * The published token is the whole compare-and-swap contract: {@code INITIAL_VERSION} claims a
-   * free name, and a replace must send back the exact path the caller captured. A re-read, a
-   * default, or a re-derived value would silently turn a conditional write into a blind one.
-   */
+  /** A re-read, a default, or a re-derived token turns a conditional write into a blind one. */
   @Test
   void publishedPointerRowCarriesTheNewPathAndTheCapturedBaseAsExpectedVersion() {
     ViewCommitResult created = harness.getViewRepository().commit(ViewTestFixtures.createIntent());
@@ -923,7 +858,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     return -1;
   }
 
-  /** The create publish carries INITIAL_VERSION on the wire-facing pointer, and writes first. */
+  /** The create publish carries INITIAL_VERSION, and writes first. */
   @Test
   void createPublishesInitialVersionAfterWritingItsFile() {
     harness.getViewRepository().commit(ViewTestFixtures.createIntent());
@@ -944,11 +879,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
         1, countStartingWith(events, InMemoryViewHouseTableRepository.FIND_ENTITY));
   }
 
-  /**
-   * Every supplied dialect is persisted, in full, alongside the user properties. A partial write
-   * here would break engines that read the missing dialect and would also make two structurally
-   * different definitions compare equal.
-   */
+  /** A partial write would break engines reading the missing dialect. */
   @Test
   void everySuppliedRepresentationAndUserPropertyIsPersisted() {
     Map<String, String> userProperties = new LinkedHashMap<>();
@@ -982,7 +913,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     Assertions.assertEquals("a view", metadata.properties().get("comment"));
   }
 
-  /** What the caller committed is exactly what a subsequent load reports. */
+  /** What was committed is exactly what a load reports. */
   @Test
   void aCommittedViewLoadsBackWithTheSameDefinition() {
     ViewCommitResult created =
@@ -1034,13 +965,9 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     Assertions.assertEquals(created.getLastModifiedTime(), loaded.getLastModifiedTime());
   }
 
-  /* -------------------------------------------------------------------------
-   * Base-token handling on replace.
-   * ---------------------------------------------------------------------- */
+  /* ---- Base-token handling on replace. ---- */
 
-  /**
-   * A replace based on a path that is no longer current is stale, and is rejected before any write.
-   */
+  /** A stale base is rejected before any write. */
   @Test
   void replaceWithAStaleBaseTokenFailsBeforeWritingAnything() {
     ViewCommitResult created = harness.getViewRepository().commit(ViewTestFixtures.createIntent());
@@ -1067,7 +994,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
         harness.getHouseTableRepository().peek(DB, VIEW).get().getTableLocation());
   }
 
-  /** Replacing a view that is not there is a load failure, not an implicit create. */
+  /** A load failure, not an implicit create. */
   @Test
   void replaceOfAnAbsentViewNeverBecomesACreate() {
     Assertions.assertThrows(
@@ -1081,7 +1008,7 @@ public class OpenHouseInternalViewRepositoryCommitTest {
     Assertions.assertTrue(harness.metadataFiles().isEmpty());
   }
 
-  /** A replace pointed at a key occupied by a table is not a view commit either. */
+  /** A key occupied by a table is not a view commit either. */
   @Test
   void replaceOfATablePointerIsRejectedAsNoSuchView() {
     harness

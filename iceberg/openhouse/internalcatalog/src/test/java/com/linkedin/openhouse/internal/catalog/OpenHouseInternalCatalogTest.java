@@ -163,13 +163,7 @@ public class OpenHouseInternalCatalogTest {
     }
   }
 
-  /* -------------------------------------------------------------------------
-   * The v1 table entry points must never mutate a view.
-   *
-   * A view pointer and a table pointer share one House Table key space, so a
-   * table API pointed at a view name would otherwise delete a live view row and,
-   * with purge, its storage prefix as well.
-   * ---------------------------------------------------------------------- */
+  /* ---- The v1 table entry points must never mutate a view: one shared key space. ---- */
 
   private static HouseTable viewRow() {
     return HouseTable.builder()
@@ -198,7 +192,7 @@ public class OpenHouseInternalCatalogTest {
     verify((SupportsPrefixOperations) fileIO, never()).deletePrefix(any());
   }
 
-  /** An entity type this build does not recognize is not a table, so the drop fails closed. */
+  /** An unrecognized type is not a table, so the drop fails closed. */
   @Test
   void dropTableRefusesAnUnknownEntityTypeBeforeDeletingAnything() {
     HouseTable unknown = viewRow().toBuilder().entityType("MATERIALIZED_VIEW").build();
@@ -217,7 +211,7 @@ public class OpenHouseInternalCatalogTest {
     verify((SupportsPrefixOperations) fileIO, never()).deletePrefix(any());
   }
 
-  /** A row written before the discriminator existed is a table, and stays droppable. */
+  /** A row predating the discriminator is a table, and stays droppable. */
   @Test
   void dropTableStillAcceptsALegacyRowWithNoEntityType() {
     HouseTableRepository repo = mock(HouseTableRepository.class);
@@ -236,11 +230,7 @@ public class OpenHouseInternalCatalogTest {
     verify((SupportsPrefixOperations) fileIO).deletePrefix(EXPECTED_BASE);
   }
 
-  /**
-   * House Table writes the canonical constant name, so a lowercase "table" is a corrupted row
-   * rather than a table. Trusting it would let a table API mutate a row the contract never
-   * identified.
-   */
+  /** A lowercase "table" is a corrupted row, not a table. */
   @Test
   void dropTableRefusesANonCanonicalTableDiscriminator() {
     HouseTable malformed = viewRow().toBuilder().entityType("table").build();
@@ -258,10 +248,7 @@ public class OpenHouseInternalCatalogTest {
     verify((SupportsPrefixOperations) fileIO, never()).deletePrefix(any());
   }
 
-  /**
-   * Rename has to reject a view before {@code loadTable}, because loading would build table
-   * operations over view metadata and the following transaction would rewrite the pointer.
-   */
+  /** Before {@code loadTable}: loading would build table operations over view metadata. */
   @Test
   void renameTableRefusesAViewPointerBeforeLoadingIt() {
     HouseTableRepository repo = mock(HouseTableRepository.class);
@@ -281,7 +268,7 @@ public class OpenHouseInternalCatalogTest {
     verify(repo, never()).save(any());
   }
 
-  /** Catches a load attempt so the rename guard can be proven to run before it. */
+  /** Catches a load attempt, so the guard can be proven to run before it. */
   private static class LoadRecordingCatalog extends FixedFileIOCatalog {
     private boolean loadTableCalled;
 

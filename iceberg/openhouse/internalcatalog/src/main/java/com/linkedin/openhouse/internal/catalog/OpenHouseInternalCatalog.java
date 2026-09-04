@@ -154,10 +154,8 @@ public class OpenHouseInternalCatalog extends BaseMetastoreCatalog {
   }
 
   /**
-   * Views and tables share one House Table key space, so a row being present is not enough to make
-   * it a table. A row written before the discriminator column existed carries no entity type and is
-   * a table; anything else that is not explicitly TABLE is out of reach of the table APIs,
-   * including a type this build does not recognize.
+   * A row being present does not make it a table. Only a legacy row, which carries no discriminator
+   * at all, is treated as one; every other value must be exactly TABLE.
    */
   private static boolean isTableEntity(HouseTable houseTable) {
     String entityType = houseTable.getEntityType();
@@ -227,8 +225,7 @@ public class OpenHouseInternalCatalog extends BaseMetastoreCatalog {
 
   @Override
   public void renameTable(TableIdentifier from, TableIdentifier to) {
-    // Must precede loadTable: loading would build table operations over view metadata, and the
-    // transaction below would then rewrite the pointer.
+    // Must precede loadTable, which would build table operations over view metadata.
     findHouseTable(from)
         .filter(houseTable -> !isTableEntity(houseTable))
         .ifPresent(

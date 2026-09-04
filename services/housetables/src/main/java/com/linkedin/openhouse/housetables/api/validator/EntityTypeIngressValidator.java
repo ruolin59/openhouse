@@ -6,13 +6,8 @@ import com.linkedin.openhouse.housetables.model.EntityType;
 import org.springframework.stereotype.Component;
 
 /**
- * Resolves the entity type of a PUT payload at ingress, ahead of every other validation. A payload
- * may agree with its route or stay silent, never override it.
- *
- * <p>The field is required by the contract and every first-party writer sends it. Stamping an
- * absent value is kept as a defensive fallback rather than a compatibility crutch: rejecting null
- * here would turn a stale or third-party caller into an outage instead of a silently corrected
- * write, and the route already knows the answer with certainty.
+ * Stamps the route's canonical entity type onto a PUT payload at ingress, ahead of other
+ * validation. A payload may agree with its route or omit the type; it may never contradict it.
  */
 @Component
 public class EntityTypeIngressValidator {

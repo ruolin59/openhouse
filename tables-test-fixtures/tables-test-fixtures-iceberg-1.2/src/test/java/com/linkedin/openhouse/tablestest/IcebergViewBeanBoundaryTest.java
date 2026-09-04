@@ -29,17 +29,12 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.context.ConfigurableApplicationContext;
 
 /**
- * Guards the Iceberg 1.2 / 1.5 boundary for the view commit repository.
+ * Guards the Iceberg 1.2 / 1.5 boundary. Lives in the 1.2 fixture's test sources, which the 1.5
+ * fixture also compiles and runs, so the expectation is chosen at runtime from the classpath.
  *
- * <p>This class lives in the 1.2 fixture's test sources, which the 1.5 fixture also compiles and
- * runs, so the same assertions execute against both Iceberg versions and the expectation is chosen
- * at runtime from what is actually on the classpath.
- *
- * <p>The boundary matters because the fixture component-scans {@code
- * com.linkedin.openhouse.internal.catalog}. Under Iceberg 1.2 there is no {@code
- * org.apache.iceberg.view} package at all, so a view-typed bean, or a view type anywhere on a
- * shared bean's signature, makes Spring fail while introspecting rather than at the call site —
- * which is why the check below is reflective and covers every bean, not just the view ones.
+ * <p>The fixture component-scans {@code com.linkedin.openhouse.internal.catalog}, and under 1.2 a
+ * view type anywhere on a shared bean signature fails during Spring introspection rather than at
+ * the call site. Hence a reflective check over every bean, not just the view ones.
  */
 public class IcebergViewBeanBoundaryTest {
 
@@ -70,10 +65,7 @@ public class IcebergViewBeanBoundaryTest {
     return application.run();
   }
 
-  /**
-   * Under 1.2 the conditional configuration is skipped entirely, so no repository or codec bean
-   * exists. Under 1.5 there is exactly one of each.
-   */
+  /** Under 1.2 the conditional configuration is skipped; under 1.5 there is one of each. */
   @Test
   public void viewCommitBeansExistOnlyWhereTheIcebergViewApiDoes() {
     try (ConfigurableApplicationContext context = boot()) {
@@ -108,14 +100,9 @@ public class IcebergViewBeanBoundaryTest {
   }
 
   /**
-   * The real hazard is a shared bean quietly growing a view type on a method, constructor, or
-   * field. That is invisible under 1.5 and fatal under 1.2, so every bean's signature is walked
-   * here.
-   *
-   * <p>The walk is over {@link Type}, not erased {@link Class}, because {@code List<ViewMetadata>}
-   * erases to {@code List} and would otherwise slip through; it includes inherited public methods
-   * because a leak can be inherited; and it treats a resolution failure during inspection as an
-   * offender, since that is exactly the Spring-introspection failure this test exists to prevent.
+   * The walk is over {@link Type}, not erased {@link Class}, because {@code List<ViewMetadata>}
+   * erases to {@code List}; it includes inherited methods; and a resolution failure counts as an
+   * offender, since that is the Spring-introspection failure this test exists to prevent.
    */
   @Test
   public void noSharedBeanSignatureNamesAnIcebergViewType() {
@@ -194,17 +181,10 @@ public class IcebergViewBeanBoundaryTest {
   }
 
   /**
-   * Reflection resolves a whole member category at once, so one unresolvable member blinds the scan
-   * for every other member of that bean. Swallowing such a failure would let a genuine view leak on
-   * a sibling member go unexamined, so a failure is never simply ignored:
-   *
-   * <ol>
-   *   <li>if the unresolvable type is itself an Iceberg view type, that is the leak;
-   *   <li>otherwise the bean's class file is scanned directly, which needs no type resolution at
-   *       all and therefore cannot be blinded by the same missing dependency;
-   *   <li>only a bean on the narrow optional-dependency allowlist may then be tolerated. Anything
-   *       else is reported, because "we could not check it" is not the same as "it is clean".
-   * </ol>
+   * Reflection resolves a whole member category at once, so one unresolvable member would otherwise
+   * blind the scan for its siblings. A failure is never ignored: an Iceberg view type is the leak;
+   * anything else falls back to a class-file scan, and only the narrow allowlist is tolerated,
+   * because "could not check" is not "clean".
    */
   private static void safely(
       List<String> offenders, String beanName, Class<?> type, Runnable inspection) {
@@ -263,9 +243,8 @@ public class IcebergViewBeanBoundaryTest {
   }
 
   /**
-   * Reads the bean's own class file and looks for the package in its constant pool. Descriptors and
-   * generic signatures are stored there as plain text, so this sees every signature the class
-   * declares without asking the class loader to resolve anything.
+   * Descriptors and generic signatures live in the constant pool as plain text, so this sees every
+   * declared signature without asking the class loader to resolve anything.
    *
    * @return true when found, false when definitely absent, null when the class file is unreadable
    */
@@ -291,8 +270,7 @@ public class IcebergViewBeanBoundaryTest {
   }
 
   /**
-   * The only beans allowed to be uninspectable, and only for the exact dependency that is missing.
-   * Anything broader would re-open the masking hole this allowlist exists inside of.
+   * Keyed on both the exact bean and the exact missing dependency; anything broader masks leaks.
    */
   static boolean isKnownOptionalDependencyGap(Class<?> type, String detail) {
     String missing = detail.toLowerCase(java.util.Locale.ROOT);
@@ -304,13 +282,12 @@ public class IcebergViewBeanBoundaryTest {
     return false;
   }
 
-  /** Bean class name to the lowercase fragment of the optional dependency it may be missing. */
+  /** Bean class name to the lowercase fragment of the dependency it may be missing. */
   private static final Map<String, String> OPTIONAL_DEPENDENCY_GAPS = optionalDependencyGaps();
 
   private static Map<String, String> optionalDependencyGaps() {
     Map<String, String> gaps = new HashMap<>();
-    // springdoc's Querydsl integration is registered unconditionally but Querydsl itself is not a
-    // dependency of this fixture, so its signatures cannot resolve on either Iceberg version.
+    // Registered unconditionally by springdoc, but Querydsl is not a dependency of this fixture.
     gaps.put(
         "org.springdoc.data.rest.customisers.QuerydslPredicateOperationCustomizer", "querydsl");
     return gaps;
@@ -321,7 +298,7 @@ public class IcebergViewBeanBoundaryTest {
     record(offenders, beanName, beanType, candidate, VIEW_PACKAGE_PREFIX, new HashSet<Type>());
   }
 
-  /** Walks parameterized types, arrays, wildcards, and type-variable bounds to their components. */
+  /** Walks parameterized types, arrays, wildcards, and bounds to their components. */
   private static void record(
       List<String> offenders,
       String beanName,
@@ -387,12 +364,7 @@ public class IcebergViewBeanBoundaryTest {
     }
   }
 
-  /**
-   * The audit above is only worth anything if the walker actually descends into generic arguments,
-   * arrays, and bounds; an erased walk over {@code Class} would silently pass everything. This runs
-   * the same walker against a probe with known nested types, using a prefix that exists on both
-   * Iceberg versions so the proof itself is version-neutral.
-   */
+  /** Proves the walker descends at all: an erased walk would silently pass everything. */
   @Test
   public void theSignatureWalkerDescendsIntoGenericsArraysAndBounds() {
     String probedPrefix = "java.util.concurrent.";
@@ -452,11 +424,7 @@ public class IcebergViewBeanBoundaryTest {
     Assertions.assertTrue(clean.isEmpty(), "a clean signature must not be flagged: " + clean);
   }
 
-  /**
-   * The masking path: reflection fails on one member for an unrelated missing dependency, while a
-   * different member of the same bean names a type we must not miss. The class-file fallback needs
-   * no type resolution, so the leak is still reported instead of being swallowed with the failure.
-   */
+  /** Reflection fails on one member while another leaks; the fallback must still report it. */
   @Test
   public void anUnrelatedResolutionFailureCannotHideALeakOnAnotherMember() {
     String probedPrefix = "java.util.concurrent.";
@@ -495,9 +463,7 @@ public class IcebergViewBeanBoundaryTest {
     Assertions.assertEquals(1, direct.size(), String.valueOf(direct));
   }
 
-  /**
-   * The allowlist is keyed on both the exact bean type and the exact dependency that is missing.
-   */
+  /** Keyed on both the exact bean type and the exact missing dependency. */
   @Test
   public void theOptionalDependencyAllowlistIsNarrow() {
     Assertions.assertFalse(
@@ -523,7 +489,7 @@ public class IcebergViewBeanBoundaryTest {
     private String[] plainArray;
   }
 
-  /** The conditional view beans are the only ones allowed to name Iceberg view types. */
+  /** The only beans allowed to name Iceberg view types. */
   private static boolean isViewScopedBean(Class<?> type) {
     return type.getName().startsWith("com.linkedin.openhouse.internal.catalog.view.")
         && (type.getName().endsWith("ViewMetadataCodec")
