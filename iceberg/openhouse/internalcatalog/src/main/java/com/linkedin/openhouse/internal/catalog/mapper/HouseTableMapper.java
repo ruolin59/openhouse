@@ -18,6 +18,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 @Mapper(componentModel = "spring")
 public abstract class HouseTableMapper {
+
+  /** Canonical House Table discriminator values; the column vocabulary is exactly these two. */
+  static final String ENTITY_TYPE_TABLE = "TABLE";
+
+  static final String ENTITY_TYPE_VIEW = "VIEW";
+
   @Autowired FileIOManager fileIOManager;
 
   @Mapping(target = "lastModifiedTime", ignore = true)
@@ -44,13 +50,28 @@ public abstract class HouseTableMapper {
   })
   public abstract HouseTable toHouseTable(UserTable userTable);
 
-  // The pointer carries no discriminator: entity type lives only on the HTS row, and HTS sets it
-  // from the endpoint the write arrived on.
+  /**
+   * The outgoing table write. Entity type is a required field of the House Table contract, so it is
+   * stamped here rather than left for the route to infer; this is also the mapping every caller
+   * that builds a table-shaped {@code UserTable} gets, so the discriminator can never be omitted by
+   * accident.
+   */
   @Mappings({
     @Mapping(target = "metadataLocation", source = "houseTable.tableLocation"),
-    @Mapping(target = "entityType", ignore = true)
+    @Mapping(target = "entityType", constant = ENTITY_TYPE_TABLE)
   })
   public abstract UserTable toUserTable(HouseTable houseTable);
+
+  /**
+   * The outgoing view write. Views share the pointer shape with tables, so they share everything
+   * but the discriminator, which is declared explicitly rather than overriding the table mapping
+   * after the fact.
+   */
+  @Mappings({
+    @Mapping(target = "metadataLocation", source = "houseTable.tableLocation"),
+    @Mapping(target = "entityType", constant = ENTITY_TYPE_VIEW)
+  })
+  public abstract UserTable toUserView(HouseTable houseTable);
 
   private Map<String, String> extractRawHTSFields(Map<String, String> input) {
     Map<String, String> output = new HashMap<>();
@@ -71,9 +92,10 @@ public abstract class HouseTableMapper {
   }
 
   /**
-   * MapStruct picks this up as the implicit String-to-String mapping for every string property, so
-   * it must tolerate null: nullable columns such as {@code entityType} are legitimately absent on
-   * legacy rows.
+   * MapStruct picks this up as the implicit String-to-String mapping for every string property, and
+   * {@code toHouseTable} relies on that to strip the namespace from values as well as keys. It must
+   * therefore tolerate null, because {@code tableVersion} and {@code storageType} carry no
+   * {@code @NotEmpty} and are legitimately absent on a read.
    */
   static String stripOhNamespace(String key) {
     if (key == null) {

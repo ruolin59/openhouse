@@ -26,7 +26,11 @@ public class EntityTypeIngressValidatorTest {
         .build();
   }
 
-  /** The wire field stays nullable for rolling deploys: the route resolves it, never rejects it. */
+  /**
+   * Entity type is a required field of the contract, and every first-party client now sends it. The
+   * route still resolves an absent value rather than rejecting it, so this stays a stamp and never
+   * becomes a rejection.
+   */
   @ParameterizedTest
   @NullSource
   @ValueSource(strings = {"TABLE", "table", "TaBlE"})
@@ -41,6 +45,23 @@ public class EntityTypeIngressValidatorTest {
   public void testViewRouteStampsCanonicalViewForAgreeingOrSilentPayloads(String declared) {
     Assertions.assertEquals(
         "VIEW", validator.normalize(entity(declared), EntityType.VIEW).getEntityType());
+  }
+
+  /**
+   * The defensive fallback, stated on its own rather than as one case of a parameterized set,
+   * because it is the behaviour the contract change deliberately keeps. Requiring the field made a
+   * missing value a client bug; it did not make it a request this server may refuse, since refusing
+   * would turn a stale caller into an outage instead of a silently corrected write.
+   */
+  @ParameterizedTest
+  @EnumSource(EntityType.class)
+  public void testAbsentEntityTypeIsStillStampedFromTheRouteAsADefensiveFallback(
+      EntityType routeEntityType) {
+    UserTable submitted = entity(null);
+
+    UserTable normalized = validator.normalize(submitted, routeEntityType);
+
+    Assertions.assertEquals(routeEntityType.name(), normalized.getEntityType());
   }
 
   /** Every other field is carried through untouched; only the discriminator is decided here. */

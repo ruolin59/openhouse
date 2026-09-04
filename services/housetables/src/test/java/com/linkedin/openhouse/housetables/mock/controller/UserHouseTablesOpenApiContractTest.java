@@ -94,6 +94,58 @@ public class UserHouseTablesOpenApiContractTest {
     return false;
   }
 
+  private JsonObject generatedUserTableSchema() throws Exception {
+    String document =
+        mvc.perform(MockMvcRequestBuilders.get("/v3/api-docs"))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+    JsonObject schemas =
+        JsonParser.parseString(document)
+            .getAsJsonObject()
+            .getAsJsonObject("components")
+            .getAsJsonObject("schemas");
+    assertThat(schemas.keySet()).contains("UserTable");
+    return schemas.getAsJsonObject("UserTable");
+  }
+
+  /**
+   * The discriminator is part of the contract, not an optional hint a client may omit and let the
+   * route infer. Every first-party writer stamps it, so the document has to say so; the route-side
+   * stamp survives as a defensive fallback, which is a server behaviour rather than a contract
+   * permission to leave the field out.
+   */
+  @Test
+  public void testUserTableSchemaDeclaresEntityTypeAsRequired() throws Exception {
+    JsonObject userTable = generatedUserTableSchema();
+
+    assertThat(userTable.has("required"))
+        .withFailMessage("UserTable declares no required fields at all")
+        .isTrue();
+    Set<String> required = new LinkedHashSet<>();
+    userTable.getAsJsonArray("required").forEach(field -> required.add(field.getAsString()));
+
+    assertThat(required).contains("entityType");
+  }
+
+  /**
+   * The old description told callers that omitting the field meant TABLE. Leaving that in place
+   * would document the exact behaviour the contract change removes.
+   */
+  @Test
+  public void testEntityTypeDescriptionNoLongerOffersNullAsASpelling() throws Exception {
+    JsonObject entityType =
+        generatedUserTableSchema().getAsJsonObject("properties").getAsJsonObject("entityType");
+
+    String description = entityType.get("description").getAsString();
+    // Case-insensitive, because "TABLE or null", "may be null" and "null or TABLE" all offer the
+    // same removed spelling while sliding past an exact-substring check.
+    assertThat(description).doesNotContainIgnoringCase("null");
+    assertThat(description).containsIgnoringCase("case-insensitiv");
+  }
+
   @Test
   public void testGeneratedDocumentDeclaresExactlyTheFrozenResponseCodes() throws Exception {
     assertThat(generatedUserTableOperations())

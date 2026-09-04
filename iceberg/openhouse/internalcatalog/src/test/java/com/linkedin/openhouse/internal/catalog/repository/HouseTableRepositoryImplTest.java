@@ -4,6 +4,9 @@ import static com.linkedin.openhouse.internal.catalog.HouseTableModelConstants.*
 import static org.assertj.core.api.Assertions.*;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.linkedin.openhouse.housetables.client.api.ToggleStatusApi;
 import com.linkedin.openhouse.housetables.client.api.UserTableApi;
 import com.linkedin.openhouse.housetables.client.invoker.ApiClient;
@@ -32,7 +35,10 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.QueueDispatcher;
+import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -121,6 +127,20 @@ public class HouseTableRepositoryImplTest {
     mockHtsServer.shutdown();
   }
 
+  /**
+   * The server outlives a single test method, so a queued response or a recorded request left by
+   * one test would otherwise be handed to the next. Resetting both keeps request-level assertions
+   * honest regardless of the order tests run in.
+   */
+  @AfterEach
+  void resetMockServerState() throws InterruptedException {
+    mockHtsServer.setDispatcher(new QueueDispatcher());
+    RecordedRequest leftover = mockHtsServer.takeRequest(1, TimeUnit.MILLISECONDS);
+    while (leftover != null) {
+      leftover = mockHtsServer.takeRequest(1, TimeUnit.MILLISECONDS);
+    }
+  }
+
   @Test
   public void testRepoFindById() {
     EntityResponseBodyUserTable response = new EntityResponseBodyUserTable();
@@ -163,6 +183,44 @@ public class HouseTableRepositoryImplTest {
     Assertions.assertEquals(result.getTableLocation(), HOUSE_TABLE.getTableLocation());
     Assertions.assertEquals(result.getTableVersion(), HOUSE_TABLE.getTableVersion());
     Assertions.assertEquals(result.getStorageType(), HOUSE_TABLE.getStorageType());
+  }
+
+  /**
+   * Entity type is a required field of the House Table contract, so the table write declares TABLE
+   * rather than leaving the route to infer it. The route-side stamp remains as a defensive
+   * fallback, but a client that relies on it is out of contract.
+   */
+  @Test
+  public void testRepoSaveDeclaresTheTableEntityTypeOnTheOutgoingBody()
+      throws InterruptedException {
+    EntityResponseBodyUserTable putResponse = new EntityResponseBodyUserTable();
+    putResponse.entity(houseTableMapper.toUserTable(HOUSE_TABLE));
+    mockHtsServer.enqueue(
+        new MockResponse()
+            .setResponseCode(201)
+            .setBody((new Gson()).toJson(putResponse))
+            .addHeader("Content-Type", "application/json"));
+
+    htsRepo.save(HOUSE_TABLE);
+
+    RecordedRequest request = mockHtsServer.takeRequest(30, TimeUnit.SECONDS);
+    Assertions.assertNotNull(request);
+    Assertions.assertEquals("PUT", request.getMethod());
+    Assertions.assertEquals("/hts/tables", request.getPath());
+
+    JsonObject entity =
+        JsonParser.parseString(request.getBody().readUtf8())
+            .getAsJsonObject()
+            .getAsJsonObject("entity");
+    JsonElement declaredEntityType = entity.get("entityType");
+    Assertions.assertTrue(
+        declaredEntityType != null && !declaredEntityType.isJsonNull(),
+        "outgoing table body must declare its entity type");
+    Assertions.assertEquals(
+        "TABLE",
+        declaredEntityType.getAsString(),
+        "the table route must be told, in the canonical spelling, that it is receiving a table");
+    Assertions.assertEquals(HOUSE_TABLE.getTableId(), entity.get("tableId").getAsString());
   }
 
   @Test

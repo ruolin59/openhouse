@@ -457,7 +457,7 @@ public class HouseTableRepositoryImpl implements HouseTableRepository {
   public HouseTable saveView(HouseTable houseTable) {
     CreateUpdateEntityRequestBodyUserTable requestBody =
         new CreateUpdateEntityRequestBodyUserTable()
-            .entity(houseTableMapper.toUserTable(houseTable));
+            .entity(houseTableMapper.toUserView(houseTable));
 
     try {
       return apiInstance

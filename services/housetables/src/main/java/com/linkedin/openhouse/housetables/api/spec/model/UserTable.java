@@ -63,11 +63,18 @@ public class UserTable {
   @JsonProperty(value = "creationTime")
   private Long creationTime;
 
+  /**
+   * Required by the contract: every writer states the type of the entity it is writing.
+   * Deliberately carries no {@code @NotNull} and no binding-level required flag, because the route
+   * stamps an absent value as a defensive fallback and a binding rejection would run before that
+   * stamp could.
+   */
   @Schema(
       description =
-          "Type of the catalog object occupying this (databaseId, tableId) key. Null or 'TABLE' "
-              + "means a table; 'VIEW' means a view. Matched case-insensitively.",
-      example = "TABLE")
+          "Type of the catalog object occupying this (databaseId, tableId) key. 'TABLE' means a "
+              + "table; 'VIEW' means a view. Matched case-insensitively.",
+      example = "TABLE",
+      requiredMode = Schema.RequiredMode.REQUIRED)
   @JsonProperty(value = "entityType")
   @Pattern(regexp = ENTITY_TYPE_REGEX, message = ENTITY_TYPE_ERROR_MSG)
   private String entityType;

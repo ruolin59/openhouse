@@ -4,6 +4,7 @@ import static com.linkedin.openhouse.internal.catalog.HouseTableModelConstants.H
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.linkedin.openhouse.housetables.client.api.ToggleStatusApi;
@@ -193,16 +194,21 @@ public class HouseTableViewRepositoryImplTest {
     Assertions.assertEquals(VIEW_METADATA_LOCATION, found.get().getTableLocation());
   }
 
-  /** A legacy row carries no discriminator, and must survive mapping as a null entity type. */
+  /**
+   * House Table resolves a legacy row's absent column to TABLE before it ever reaches the wire, so
+   * the neutral read only ever sees a canonical discriminator and must map it faithfully. TABLE is
+   * pinned here and VIEW above, which is the whole vocabulary.
+   */
   @Test
-  public void findEntityByIdMapsALegacyRowWithNoDiscriminator() throws InterruptedException {
-    enqueueEntity(200, viewUserTable(null));
+  public void findEntityByIdMapsTheCanonicalTableDiscriminator() throws InterruptedException {
+    enqueueEntity(200, viewUserTable("TABLE"));
 
     Optional<HouseTable> found = htsRepo.findEntityById(viewKey());
 
     nextRequest();
     Assertions.assertTrue(found.isPresent());
-    Assertions.assertNull(found.get().getEntityType());
+    Assertions.assertEquals("TABLE", found.get().getEntityType());
+    Assertions.assertEquals(VIEW_METADATA_LOCATION, found.get().getTableLocation());
   }
 
   @Test
@@ -274,11 +280,12 @@ public class HouseTableViewRepositoryImplTest {
   }
 
   /**
-   * The view write goes to the typed route with entity type left unset. House Table stamps VIEW
-   * from the route, and a body that named a type would only create a way for the two to disagree.
+   * The view write goes to the typed route and says what it is writing. Entity type is a required
+   * field of the House Table contract now, so leaving it for the route to infer would put this
+   * client out of contract; the route-side stamp survives only as a defensive fallback.
    */
   @Test
-  public void saveViewPutsToTheTypedViewRouteWithoutDeclaringEntityType()
+  public void saveViewPutsToTheTypedViewRouteDeclaringTheViewEntityType()
       throws InterruptedException {
     enqueueEntity(201, viewUserTable("VIEW"));
 
@@ -290,9 +297,14 @@ public class HouseTableViewRepositoryImplTest {
 
     JsonObject body = JsonParser.parseString(request.getBody().readUtf8()).getAsJsonObject();
     JsonObject entity = body.getAsJsonObject("entity");
+    JsonElement declaredEntityType = entity.get("entityType");
     Assertions.assertTrue(
-        entity.get("entityType") == null || entity.get("entityType").isJsonNull(),
-        "outgoing view body must not declare an entity type");
+        declaredEntityType != null && !declaredEntityType.isJsonNull(),
+        "outgoing view body must declare its entity type");
+    Assertions.assertEquals(
+        "VIEW",
+        declaredEntityType.getAsString(),
+        "the view route must be told, in the canonical spelling, that it is receiving a view");
     Assertions.assertEquals(VIEW_METADATA_LOCATION, entity.get("metadataLocation").getAsString());
     Assertions.assertEquals("INITIAL_VERSION", entity.get("tableVersion").getAsString());
 
