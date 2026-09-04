@@ -51,4 +51,14 @@ public class HouseTable {
    * with this table.
    */
   private String storageType;
+
+  /**
+   * Read-side discriminator for the catalog object occupying this key, mapped from the House Table
+   * row. A null value is a legacy row and means TABLE.
+   *
+   * <p>Deliberately version-neutral (a plain String, not an enum shared with the House Table
+   * service) and read-only in practice: outgoing writes leave entity type unset so House Table
+   * stamps it from the route it arrived on. It is never stamped into Iceberg metadata.
+   */
+  private String entityType;
 }

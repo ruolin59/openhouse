@@ -1,0 +1,46 @@
+package com.linkedin.openhouse.internal.catalog.view;
+
+import com.linkedin.openhouse.cluster.storage.StorageType;
+import com.linkedin.openhouse.cluster.storage.selector.StorageSelector;
+import com.linkedin.openhouse.internal.catalog.fileio.FileIOManager;
+import com.linkedin.openhouse.internal.catalog.mapper.HouseTableMapper;
+import com.linkedin.openhouse.internal.catalog.repository.HouseTableRepository;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/**
+ * Registers the view commit repository and its parser seam, and only when the runtime actually
+ * supplies the Iceberg view API.
+ *
+ * <p>The string form of {@link ConditionalOnClass} is required: it lets Spring evaluate the
+ * condition from class metadata without resolving {@code org.apache.iceberg.view.ViewMetadata},
+ * which is absent under Iceberg 1.2. Neither bean below may be an unconditional {@code @Component},
+ * or the 1.2 fixture's component scan would fail during introspection.
+ */
+@Configuration
+@ConditionalOnClass(name = "org.apache.iceberg.view.ViewMetadata")
+public class OpenHouseInternalViewConfiguration {
+
+  @Bean
+  public ViewMetadataCodec viewMetadataCodec() {
+    return new IcebergViewMetadataCodec();
+  }
+
+  @Bean
+  public OpenHouseInternalViewRepository openHouseInternalViewRepository(
+      HouseTableRepository houseTableRepository,
+      FileIOManager fileIOManager,
+      ViewMetadataCodec viewMetadataCodec,
+      StorageSelector storageSelector,
+      StorageType storageType,
+      HouseTableMapper houseTableMapper) {
+    return new OpenHouseInternalViewRepositoryImpl(
+        houseTableRepository,
+        fileIOManager,
+        viewMetadataCodec,
+        storageSelector,
+        storageType,
+        houseTableMapper);
+  }
+}

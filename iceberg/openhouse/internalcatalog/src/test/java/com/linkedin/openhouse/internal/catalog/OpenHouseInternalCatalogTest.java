@@ -14,6 +14,7 @@ import com.linkedin.openhouse.internal.catalog.model.HouseTablePrimaryKey;
 import com.linkedin.openhouse.internal.catalog.repository.HouseTableRepository;
 import com.linkedin.openhouse.internal.catalog.repository.exception.HouseTableNotFoundException;
 import java.util.Optional;
+import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.io.FileIO;
@@ -159,6 +160,139 @@ public class OpenHouseInternalCatalogTest {
   private static class TestOpenHouseInternalCatalog extends OpenHouseInternalCatalog {
     boolean isValidBaseIdentifier(TableIdentifier identifier) {
       return isValidIdentifier(identifier);
+    }
+  }
+
+  /* -------------------------------------------------------------------------
+   * The v1 table entry points must never mutate a view.
+   *
+   * A view pointer and a table pointer share one House Table key space, so a
+   * table API pointed at a view name would otherwise delete a live view row and,
+   * with purge, its storage prefix as well.
+   * ---------------------------------------------------------------------- */
+
+  private static HouseTable viewRow() {
+    return HouseTable.builder()
+        .databaseId(DB)
+        .tableId(TABLE)
+        .tableUUID("uuid")
+        .tableLocation(METADATA_LOCATION)
+        .entityType("VIEW")
+        .build();
+  }
+
+  @Test
+  void dropTableRefusesAViewPointerBeforeDeletingAnything() {
+    HouseTableRepository repo = mock(HouseTableRepository.class);
+    when(repo.findById(any(HouseTablePrimaryKey.class))).thenReturn(Optional.of(viewRow()));
+    when(repo.findEntityById(any(HouseTablePrimaryKey.class))).thenReturn(Optional.of(viewRow()));
+    FileIO fileIO =
+        mock(FileIO.class, withSettings().extraInterfaces(SupportsPrefixOperations.class));
+    OpenHouseInternalCatalog catalog = new FixedFileIOCatalog(fileIO);
+    catalog.houseTableRepository = repo;
+
+    Assertions.assertThrows(NoSuchTableException.class, () -> catalog.dropTable(IDENTIFIER, true));
+
+    verify(repo, never()).deleteById(any());
+    verify(repo, never()).deleteById(any(), anyBoolean());
+    verify((SupportsPrefixOperations) fileIO, never()).deletePrefix(any());
+  }
+
+  /** An entity type this build does not recognize is not a table, so the drop fails closed. */
+  @Test
+  void dropTableRefusesAnUnknownEntityTypeBeforeDeletingAnything() {
+    HouseTable unknown = viewRow().toBuilder().entityType("MATERIALIZED_VIEW").build();
+    HouseTableRepository repo = mock(HouseTableRepository.class);
+    when(repo.findById(any(HouseTablePrimaryKey.class))).thenReturn(Optional.of(unknown));
+    when(repo.findEntityById(any(HouseTablePrimaryKey.class))).thenReturn(Optional.of(unknown));
+    FileIO fileIO =
+        mock(FileIO.class, withSettings().extraInterfaces(SupportsPrefixOperations.class));
+    OpenHouseInternalCatalog catalog = new FixedFileIOCatalog(fileIO);
+    catalog.houseTableRepository = repo;
+
+    Assertions.assertThrows(NoSuchTableException.class, () -> catalog.dropTable(IDENTIFIER, true));
+
+    verify(repo, never()).deleteById(any());
+    verify(repo, never()).deleteById(any(), anyBoolean());
+    verify((SupportsPrefixOperations) fileIO, never()).deletePrefix(any());
+  }
+
+  /** A row written before the discriminator existed is a table, and stays droppable. */
+  @Test
+  void dropTableStillAcceptsALegacyRowWithNoEntityType() {
+    HouseTableRepository repo = mock(HouseTableRepository.class);
+    HouseTable legacy =
+        HouseTable.builder().databaseId(DB).tableId(TABLE).tableLocation(METADATA_LOCATION).build();
+    when(repo.findById(any(HouseTablePrimaryKey.class))).thenReturn(Optional.of(legacy));
+    when(repo.findEntityById(any(HouseTablePrimaryKey.class))).thenReturn(Optional.of(legacy));
+    FileIO fileIO =
+        mock(FileIO.class, withSettings().extraInterfaces(SupportsPrefixOperations.class));
+    OpenHouseInternalCatalog catalog = new FixedFileIOCatalog(fileIO);
+    catalog.houseTableRepository = repo;
+
+    Assertions.assertTrue(catalog.dropTable(IDENTIFIER, true));
+
+    verify(repo).deleteById(any(HouseTablePrimaryKey.class), eq(true));
+    verify((SupportsPrefixOperations) fileIO).deletePrefix(EXPECTED_BASE);
+  }
+
+  /**
+   * House Table writes the canonical constant name, so a lowercase "table" is a corrupted row
+   * rather than a table. Trusting it would let a table API mutate a row the contract never
+   * identified.
+   */
+  @Test
+  void dropTableRefusesANonCanonicalTableDiscriminator() {
+    HouseTable malformed = viewRow().toBuilder().entityType("table").build();
+    HouseTableRepository repo = mock(HouseTableRepository.class);
+    when(repo.findById(any(HouseTablePrimaryKey.class))).thenReturn(Optional.of(malformed));
+    FileIO fileIO =
+        mock(FileIO.class, withSettings().extraInterfaces(SupportsPrefixOperations.class));
+    OpenHouseInternalCatalog catalog = new FixedFileIOCatalog(fileIO);
+    catalog.houseTableRepository = repo;
+
+    Assertions.assertThrows(NoSuchTableException.class, () -> catalog.dropTable(IDENTIFIER, true));
+
+    verify(repo, never()).deleteById(any());
+    verify(repo, never()).deleteById(any(), anyBoolean());
+    verify((SupportsPrefixOperations) fileIO, never()).deletePrefix(any());
+  }
+
+  /**
+   * Rename has to reject a view before {@code loadTable}, because loading would build table
+   * operations over view metadata and the following transaction would rewrite the pointer.
+   */
+  @Test
+  void renameTableRefusesAViewPointerBeforeLoadingIt() {
+    HouseTableRepository repo = mock(HouseTableRepository.class);
+    when(repo.findById(any(HouseTablePrimaryKey.class))).thenReturn(Optional.of(viewRow()));
+    when(repo.findEntityById(any(HouseTablePrimaryKey.class))).thenReturn(Optional.of(viewRow()));
+    FileIO fileIO =
+        mock(FileIO.class, withSettings().extraInterfaces(SupportsPrefixOperations.class));
+    LoadRecordingCatalog catalog = new LoadRecordingCatalog(fileIO);
+    catalog.houseTableRepository = repo;
+
+    Assertions.assertThrows(
+        NoSuchTableException.class,
+        () -> catalog.renameTable(IDENTIFIER, TableIdentifier.of(DB, "renamed")));
+
+    Assertions.assertFalse(catalog.loadTableCalled, "the guard must run before loadTable");
+    verify(repo, never()).rename(any(), any(), any(), any(), any());
+    verify(repo, never()).save(any());
+  }
+
+  /** Catches a load attempt so the rename guard can be proven to run before it. */
+  private static class LoadRecordingCatalog extends FixedFileIOCatalog {
+    private boolean loadTableCalled;
+
+    LoadRecordingCatalog(FileIO fileIO) {
+      super(fileIO);
+    }
+
+    @Override
+    public Table loadTable(TableIdentifier identifier) {
+      loadTableCalled = true;
+      throw new IllegalStateException("loadTable must not be reached for a view pointer");
     }
   }
 }

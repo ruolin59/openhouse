@@ -63,6 +63,7 @@ import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.BadRequestException;
 import org.apache.iceberg.exceptions.CommitFailedException;
 import org.apache.iceberg.exceptions.CommitStateUnknownException;
+import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.exceptions.NotFoundException;
 import org.apache.iceberg.exceptions.ValidationException;
 import org.apache.iceberg.expressions.Expressions;
@@ -128,7 +129,28 @@ public class OpenHouseInternalTableOperations extends BaseMetastoreTableOperatio
           String.format(
               "Cannot find table %s after refresh, maybe another process deleted it", tableName()));
     }
+    // Defense in depth. The table read is already typed on the server, so a non-table should never
+    // arrive here; if one ever did, view metadata is a different document and handing it to
+    // TableMetadataParser would fail unhelpfully at best. Reject before the metadata load.
+    houseTable
+        .filter(row -> !isTableEntity(row))
+        .ifPresent(
+            row -> {
+              throw new NoSuchTableException(
+                  "Table does not exist: %s.%s",
+                  tableIdentifier.namespace().toString(), tableIdentifier.name());
+            });
     refreshMetadata(houseTable.map(HouseTable::getTableLocation).orElse(null));
+  }
+
+  /**
+   * Only a legacy row, which carries no discriminator at all, means TABLE by default. Every other
+   * value must be exactly the canonical constant House Table writes; a differently-cased value is a
+   * corrupted row and is not ours to parse.
+   */
+  private static boolean isTableEntity(HouseTable houseTable) {
+    String entityType = houseTable.getEntityType();
+    return entityType == null || CatalogConstants.ENTITY_TYPE_TABLE.equals(entityType);
   }
 
   /** A wrapper function to encapsulate timer logic for loading metadata. */

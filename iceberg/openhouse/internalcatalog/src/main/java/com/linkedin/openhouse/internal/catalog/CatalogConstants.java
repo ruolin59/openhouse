@@ -17,6 +17,13 @@ public final class CatalogConstants {
   public static final String OPENHOUSE_TABLEURI_KEY = "openhouse.tableUri";
   public static final String OPENHOUSE_CLUSTERID_KEY = "openhouse.clusterId";
   public static final String INITIAL_VERSION = "INITIAL_VERSION";
+
+  /**
+   * Entity type House Table stores for a table. A null column value is a legacy row and also means
+   * a table; see the House Table {@code EntityType} contract.
+   */
+  public static final String ENTITY_TYPE_TABLE = "TABLE";
+
   public static final String LAST_UPDATED_MS = "last-updated-ms";
   public static final String TRANSIENT_RESTORE_PREFIX = "__transient_restore_";
   public static final String TRANSIENT_ADDED_PREFIX = "__transient_added_";

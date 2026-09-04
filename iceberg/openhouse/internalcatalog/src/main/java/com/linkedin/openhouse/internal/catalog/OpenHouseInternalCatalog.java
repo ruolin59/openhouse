@@ -153,6 +153,18 @@ public class OpenHouseInternalCatalog extends BaseMetastoreCatalog {
     }
   }
 
+  /**
+   * Views and tables share one House Table key space, so a row being present is not enough to make
+   * it a table. A row written before the discriminator column existed carries no entity type and is
+   * a table; anything else that is not explicitly TABLE is out of reach of the table APIs,
+   * including a type this build does not recognize.
+   */
+  private static boolean isTableEntity(HouseTable houseTable) {
+    String entityType = houseTable.getEntityType();
+    // Exact match only: a differently-cased value is a corrupted row, not a table.
+    return entityType == null || CatalogConstants.ENTITY_TYPE_TABLE.equals(entityType);
+  }
+
   @Override
   public boolean dropTable(TableIdentifier identifier, boolean purge) {
     // Look up the HouseTable row directly instead of calling loadTable(), so drop works even when
@@ -160,6 +172,11 @@ public class OpenHouseInternalCatalog extends BaseMetastoreCatalog {
     HouseTable houseTable =
         findHouseTable(identifier)
             .orElseThrow(() -> new NoSuchTableException("Table does not exist: %s", identifier));
+    if (!isTableEntity(houseTable)) {
+      // Reject before pointer/prefix deletion: a table-API drop of a view would delete a live
+      // pointer and, with purge, its storage prefix.
+      throw new NoSuchTableException("Table does not exist: %s", identifier);
+    }
 
     HouseTablePrimaryKey primaryKey =
         HouseTablePrimaryKey.builder()
@@ -210,6 +227,15 @@ public class OpenHouseInternalCatalog extends BaseMetastoreCatalog {
 
   @Override
   public void renameTable(TableIdentifier from, TableIdentifier to) {
+    // Must precede loadTable: loading would build table operations over view metadata, and the
+    // transaction below would then rewrite the pointer.
+    findHouseTable(from)
+        .filter(houseTable -> !isTableEntity(houseTable))
+        .ifPresent(
+            houseTable -> {
+              throw new NoSuchTableException("Table does not exist: %s", from);
+            });
+
     Table fromTable = loadTable(from);
     String tableClusterId = fromTable.properties().get(CatalogConstants.OPENHOUSE_CLUSTERID_KEY);
 

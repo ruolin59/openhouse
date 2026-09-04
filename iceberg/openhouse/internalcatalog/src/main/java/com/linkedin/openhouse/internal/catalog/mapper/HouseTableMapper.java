@@ -38,7 +38,10 @@ public abstract class HouseTableMapper {
   @Mapping(target = "databaseId", source = "houseTable.databaseId")
   public abstract UserTable toUserTableWithDatabaseId(HouseTable houseTable);
 
-  @Mappings({@Mapping(target = "tableLocation", source = "userTable.metadataLocation")})
+  @Mappings({
+    @Mapping(target = "tableLocation", source = "userTable.metadataLocation"),
+    @Mapping(target = "entityType", source = "userTable.entityType")
+  })
   public abstract HouseTable toHouseTable(UserTable userTable);
 
   // The pointer carries no discriminator: entity type lives only on the HTS row, and HTS sets it
@@ -67,7 +70,15 @@ public abstract class HouseTableMapper {
         && HouseTableSerdeUtils.HTS_FIELD_NAMES.contains(stripOhNamespace(key));
   }
 
+  /**
+   * MapStruct picks this up as the implicit String-to-String mapping for every string property, so
+   * it must tolerate null: nullable columns such as {@code entityType} are legitimately absent on
+   * legacy rows.
+   */
   static String stripOhNamespace(String key) {
+    if (key == null) {
+      return null;
+    }
     return IS_OH_PREFIXED.test(key) ? key.substring(OPENHOUSE_NAMESPACE.length()) : key;
   }
 }
