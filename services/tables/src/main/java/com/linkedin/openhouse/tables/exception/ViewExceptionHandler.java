@@ -20,8 +20,8 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
  * location, SQL, or schema never reaches the wire, audit, or application logs. The Java cause chain
  * is retained in-process on the thrown exception for classification, but is never rendered here.
  *
- * <p>Declares only explicit, most-specific handlers &mdash; no {@code Throwable}/{@code Error}
- * handler, so a fatal {@link Error} always propagates and is never caught or swallowed.
+ * <p>Declares only explicit, most-specific handlers; no {@code Throwable}/{@code Error} handler, so
+ * a fatal {@link Error} always propagates and is never caught or swallowed.
  */
 @RestControllerAdvice(assignableTypes = ViewsController.class)
 @Order(Ordered.HIGHEST_PRECEDENCE)

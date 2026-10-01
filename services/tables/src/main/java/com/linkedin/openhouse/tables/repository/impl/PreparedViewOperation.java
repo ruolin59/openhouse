@@ -9,20 +9,20 @@ import lombok.ToString;
 
 /**
  * The single pre-admission snapshot capture: the one HTS read for a view operation, taken once and
- * reused through authorization, base-version checking, admission, the engine commit, and audit
- * &mdash; no later step re-reads.
+ * reused through authorization, base-version checking, admission, the engine commit, and audit; no
+ * later step re-reads.
  *
  * <p>Three states, matching the three repository capture shapes:
  *
  * <ul>
- *   <li>{@link #observedAbsence()} &mdash; the key held nothing at capture time (a create
- *       candidate, or a read/delete target that does not exist).
- *   <li>{@link #view(HouseTable)} &mdash; the key held a VIEW row; this is both the neutral
- *       occupant and the typed view base row (the REPLACE CAS token and audit identity source).
- *   <li>{@link #tableOccupant(HouseTable)} &mdash; the neutral POST/PUT capture found a TABLE row
- *       at this key: a collision, never revealed as a view before service authorization resolves
- *       (the capture is neutral, not typed, precisely so a table occupant is not hidden behind
- *       &quot;absent&quot;).
+ *   <li>{@link #observedAbsence()}: the key held nothing at capture time (a create candidate, or a
+ *       read/delete target that does not exist).
+ *   <li>{@link #view(HouseTable)}: the key held a VIEW row; this is both the neutral occupant and
+ *       the typed view base row (the REPLACE CAS token and audit identity source).
+ *   <li>{@link #tableOccupant(HouseTable)}: the neutral POST/PUT capture found a TABLE row at this
+ *       key: a collision, never revealed as a view before service authorization resolves (the
+ *       capture is neutral, not typed, precisely so a table occupant is not hidden behind
+ *       "absent").
  * </ul>
  */
 @Getter
@@ -42,9 +42,9 @@ public final class PreparedViewOperation {
    * keeps the exact JPA-managed entity reference the repository loaded (required so the CAS token
    * it also serves as stays the identical object the engine commits against), and that same
    * persistence context's save/merge during commit can mutate that managed instance's fields
-   * in-place once the operation publishes a new pointer &mdash; so a caller reading {@link
-   * #viewBaseRow}'s field after the commit (as audit emission does) would otherwise observe the new
-   * value instead of the one actually captured before the write.
+   * in-place once the operation publishes a new pointer, so a caller reading {@link #viewBaseRow}'s
+   * field after the commit (as audit emission does) would otherwise observe the new value instead
+   * of the one actually captured before the write.
    */
   private final String capturedTableLocation;
 

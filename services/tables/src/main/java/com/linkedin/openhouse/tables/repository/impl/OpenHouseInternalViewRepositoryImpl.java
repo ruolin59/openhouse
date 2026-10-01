@@ -262,8 +262,7 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
   /**
    * A valid persisted VIEW row always carries both facts; requiring both is this completeness
    * invariant, not an optional new field. Corrupt persisted metadata is a sanitized server fault,
-   * never reinterpreted as absence &mdash; this loads no view metadata, only the already-fetched
-   * HTS row.
+   * never reinterpreted as absence; this loads no view metadata, only the already-fetched HTS row.
    */
   private static void requireCompletePersistedPointer(HouseTable row) {
     if (StringUtils.isBlank(row.getTableLocation()) || StringUtils.isBlank(row.getStorageType())) {
