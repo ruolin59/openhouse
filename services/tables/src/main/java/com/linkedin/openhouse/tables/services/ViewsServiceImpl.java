@@ -43,11 +43,11 @@ import org.springframework.stereotype.Component;
  *             -> commit -> audit
  *
  * DELETE:     gate -> database existence -> authorization -> prepared capture
- *             -> commit -> audit
+ *             -> delete -> audit
  * </pre>
  *
- * Every response carries the server-owned {@code clusterId}; every failure is typed with its cause
- * preserved for internal classification, never rendered to the caller.
+ * GET and POST/PUT item responses carry the server-owned {@code clusterId}; every failure is typed
+ * with its cause preserved for internal classification, never rendered to the caller.
  */
 @Component
 @ConditionalOnClass(name = "org.apache.iceberg.view.ViewMetadata")
