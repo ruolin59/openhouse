@@ -36,12 +36,18 @@ import org.springframework.stereotype.Component;
  * snapshots, partition specs, sort orders, or retention semantics. Per-intent order:
  *
  * <pre>
- * gate -> database existence -> single prepared capture -> authorization
- *      (reads none, writes database-level)
- *      -> resource type / base-version -> admission -> allocate (create only)
- *      -> commit -> server-owned clusterId -> audit and typed, cause-preserving
- *      exception translation
+ * GET / LIST: gate -> database existence -> read (no authorization)
+ *
+ * POST / PUT: gate -> database existence -> prepared capture -> authorization
+ *             -> resource type / base-version -> admission -> allocate (create only)
+ *             -> commit -> audit
+ *
+ * DELETE:     gate -> database existence -> authorization -> prepared capture
+ *             -> commit -> audit
  * </pre>
+ *
+ * Every response carries the server-owned {@code clusterId}; every failure is typed with its cause
+ * preserved for internal classification, never rendered to the caller.
  */
 @Component
 @ConditionalOnClass(name = "org.apache.iceberg.view.ViewMetadata")
