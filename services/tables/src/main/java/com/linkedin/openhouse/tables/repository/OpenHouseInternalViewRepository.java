@@ -7,9 +7,9 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 /**
- * Service repository seam for views (plan &sect;6), mirroring {@code OpenHouseInternalRepository}
- * for tables without reusing its implementation: no snapshots, partition specs, sort orders, or
- * retention semantics. Owns the single pre-admission snapshot capture ({@link #prepareWrite}/{@link
+ * Service repository seam for views, mirroring {@code OpenHouseInternalRepository} for tables
+ * without reusing its implementation: no snapshots, partition specs, sort orders, or retention
+ * semantics. Owns the single pre-admission snapshot capture ({@link #prepareWrite}/{@link
  * #prepareDelete}), UUID/storage/root allocation (create only, after admission), the {@code
  * ViewCommitEngine} call, and result mapping. Surfaces engine and HTS exceptions unwrapped: typed,
  * cause-preserving translation happens once, at the {@code ViewsServiceImpl} boundary.

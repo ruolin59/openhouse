@@ -7,7 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
- * Database-scoped {@code views.enabled} gate (plan &sect;5.2 step 1, R6/F4).
+ * Database-scoped {@code views.enabled} gate.
  *
  * <p>Default off: with no matching {@code views} {@link
  * com.linkedin.openhouse.tables.toggle.model.TableToggleRule} the gate reports disabled. Enabling a

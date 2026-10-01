@@ -17,10 +17,10 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 /**
- * Service-boundary operation-audit emitter (plan &sect;10, R4). Emitted directly from {@code
- * ViewsServiceImpl} using the prepared capture and the commit outcome &mdash; never a handler
- * aspect, which cannot recover a DELETE's UUID/old pointer from a void response, or see the
- * pre-write pointer for REPLACE, without a forbidden second read.
+ * Service-boundary operation-audit emitter. Emitted directly from {@code ViewsServiceImpl} using
+ * the prepared capture and the commit outcome &mdash; never a handler aspect, which cannot recover
+ * a DELETE's UUID/old pointer from a void response, or see the pre-write pointer for REPLACE,
+ * without a forbidden second read.
  *
  * <p>Every field is populated only from context actually reached: an outcome supplies the new
  * pointer and the create UUID; the prepared capture supplies the prior identity/pointer when a row
@@ -91,9 +91,9 @@ public class ViewOperationAuditEmitter {
    * caller: one attempt, no retry, never silent (a fixed line is logged and a metric incremented).
    *
    * <p>Deliberate redaction deviation from {@code ServiceAuditAspect}: that aspect logs its caught
-   * exception; this event may carry {@code sql}/{@code schema}/CAS-token context (plan
-   * &sect;10/D4), so neither the throwable, its message, nor a stacktrace is logged here &mdash;
-   * only the safe enum status and the opaque correlation id are.
+   * exception; this event may carry {@code sql}/{@code schema}/CAS-token context, so neither the
+   * throwable, its message, nor a stacktrace is logged here &mdash; only the safe enum status and
+   * the opaque correlation id are.
    */
   private void auditSafely(ViewAuditEvent event) {
     try {

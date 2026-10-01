@@ -14,12 +14,11 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 /**
- * Narrow, highest-precedence exception advice scoped to {@link ViewsController} (plan &sect;7,
- * R5/F1). View failures never reach the global {@code OpenHouseExceptionHandler}: this advice
- * renders only status and a safe message, never a cause or stacktrace, so an engine/storage
- * exception embedding a metadata location, SQL, or schema never reaches the wire, audit, or
- * application logs. The Java cause chain is retained in-process on the thrown exception for
- * classification, but is never rendered here.
+ * Narrow, highest-precedence exception advice scoped to {@link ViewsController}. View failures
+ * never reach the global {@code OpenHouseExceptionHandler}: this advice renders only status and a
+ * safe message, never a cause or stacktrace, so an engine/storage exception embedding a metadata
+ * location, SQL, or schema never reaches the wire, audit, or application logs. The Java cause chain
+ * is retained in-process on the thrown exception for classification, but is never rendered here.
  *
  * <p>Declares only explicit, most-specific handlers &mdash; no {@code Throwable}/{@code Error}
  * handler, so a fatal {@link Error} always propagates and is never caught or swallowed.

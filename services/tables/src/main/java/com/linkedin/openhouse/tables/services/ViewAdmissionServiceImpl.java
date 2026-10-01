@@ -6,7 +6,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * M1 pass-through {@link ViewAdmissionService}: never fails. Gated to the Iceberg-view-capable
- * runtime like the rest of the bridge (plan &sect;5.1).
+ * runtime like the rest of the bridge.
  */
 @Component
 @ConditionalOnClass(name = "org.apache.iceberg.view.ViewMetadata")

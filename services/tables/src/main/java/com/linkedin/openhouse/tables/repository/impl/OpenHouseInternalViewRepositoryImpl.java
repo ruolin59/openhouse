@@ -37,10 +37,10 @@ import org.springframework.data.domain.Pageable;
 
 /**
  * Default {@link OpenHouseInternalViewRepository}, mirroring {@code
- * OpenHouseInternalRepositoryImpl} (tables) without reusing it (plan &sect;6). Gated to the
- * Iceberg-view-capable runtime via the {@link ViewsRepositoryConfig} factory, since a single {@link
- * Storage} dependency cannot be constructor-autowired unconditionally when a cluster configures
- * more than one storage (see {@code ViewsDualStorageH2IntegrationTest}).
+ * OpenHouseInternalRepositoryImpl} (tables) without reusing it. Gated to the Iceberg-view-capable
+ * runtime via the {@link ViewsRepositoryConfig} factory, since a single {@link Storage} dependency
+ * cannot be constructor-autowired unconditionally when a cluster configures more than one storage
+ * (see {@code ViewsDualStorageH2IntegrationTest}).
  */
 public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalViewRepository {
 
@@ -261,9 +261,9 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
 
   /**
    * A valid persisted VIEW row always carries both facts; requiring both is this completeness
-   * invariant, not an optional new field. Corrupt persisted metadata is a sanitized server fault
-   * (plan-approved contract), never reinterpreted as absence &mdash; this loads no view metadata,
-   * only the already-fetched HTS row.
+   * invariant, not an optional new field. Corrupt persisted metadata is a sanitized server fault,
+   * never reinterpreted as absence &mdash; this loads no view metadata, only the already-fetched
+   * HTS row.
    */
   private static void requireCompletePersistedPointer(HouseTable row) {
     if (StringUtils.isBlank(row.getTableLocation()) || StringUtils.isBlank(row.getStorageType())) {

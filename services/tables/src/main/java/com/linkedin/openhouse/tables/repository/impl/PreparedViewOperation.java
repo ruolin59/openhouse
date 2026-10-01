@@ -8,9 +8,9 @@ import lombok.Getter;
 import lombok.ToString;
 
 /**
- * The single pre-admission snapshot capture (plan &sect;6.2): the one HTS read for a view
- * operation, taken once and reused through authorization, base-version checking, admission, the
- * engine commit, and audit &mdash; no later step re-reads.
+ * The single pre-admission snapshot capture: the one HTS read for a view operation, taken once and
+ * reused through authorization, base-version checking, admission, the engine commit, and audit
+ * &mdash; no later step re-reads.
  *
  * <p>Three states, matching the three repository capture shapes:
  *
