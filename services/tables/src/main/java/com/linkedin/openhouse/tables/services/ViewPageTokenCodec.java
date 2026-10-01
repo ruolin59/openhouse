@@ -5,7 +5,7 @@ import java.util.Base64;
 import java.util.zip.CRC32;
 
 /**
- * Encodes/decodes the opaque {@link ViewPageCursor} token (plan &sect;8, R3).
+ * Encodes/decodes the opaque {@link ViewPageCursor} token.
  *
  * <p>The token is a URL-safe Base64 encoding of a delimited field list plus a trailing checksum.
  * The checksum lets {@link #decode(String)} reject a tampered or otherwise malformed token

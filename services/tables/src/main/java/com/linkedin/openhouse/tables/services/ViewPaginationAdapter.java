@@ -13,7 +13,7 @@ import org.springframework.data.domain.Sort;
 
 /**
  * Bridge-only opaque source-page-index + intra-page-offset cursor over the existing
- * page-number-based {@code findAllViewsByDatabaseId} route (plan &sect;8, &sect;6.4, R3).
+ * page-number-based {@code findAllViewsByDatabaseId} route.
  *
  * <p>The HTS validator rejects any {@code sortBy} containing a comma or colon, so no multi-column
  * tie-breaker can be sent. The only supported caller sort is the public {@code viewId}, mapped to

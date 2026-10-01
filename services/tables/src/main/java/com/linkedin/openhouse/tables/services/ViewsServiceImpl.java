@@ -32,11 +32,11 @@ import org.springframework.security.access.AuthorizationServiceException;
 import org.springframework.stereotype.Component;
 
 /**
- * Default {@link ViewsService}, modeled after {@code TablesServiceImpl} without reusing it (plan
- * &sect;5): no snapshots, partition specs, sort orders, or retention semantics. Per-intent order:
- * gate &rarr; database existence &rarr; single prepared capture &rarr; authorization (reads none,
- * writes database-level) &rarr; resource type / base-version &rarr; admission &rarr; allocate
- * (create only) &rarr; commit &rarr; server-owned {@code clusterId} &rarr; audit and typed,
+ * Default {@link ViewsService}, modeled after {@code TablesServiceImpl} without reusing it: no
+ * snapshots, partition specs, sort orders, or retention semantics. Per-intent order: gate &rarr;
+ * database existence &rarr; single prepared capture &rarr; authorization (reads none, writes
+ * database-level) &rarr; resource type / base-version &rarr; admission &rarr; allocate (create
+ * only) &rarr; commit &rarr; server-owned {@code clusterId} &rarr; audit and typed,
  * cause-preserving exception translation.
  */
 @Component
@@ -138,7 +138,7 @@ public class ViewsServiceImpl implements ViewsService {
     }
     // Outside the try: once commit/deleteById returns, SUCCESS is terminal and a subsequent audit-
     // delivery failure must never re-enter the FAILED branch above or retry the already-
-    // acknowledged mutation (F5).
+    // acknowledged mutation.
     viewOperationAuditEmitter.emitSuccess(prepared, outcome, actingPrincipal, sourceDialect);
     return Pair.of(withClusterId(outcome.getDto()), outcome.isCreated());
   }
@@ -241,8 +241,8 @@ public class ViewsServiceImpl implements ViewsService {
           ViewErrorCode.VIEW_SERVICE_UNAVAILABLE, "View service unavailable", e);
     }
     // engine BadRequestException (trusted server input), HouseTableCallerException, corrupt-row
-    // IllegalStateException, and any other unexpected failure are server faults (comment #1):
-    // caller-input 400s are owned entirely by the API validator before the service is reached.
+    // IllegalStateException, and any other unexpected failure are server faults: caller-input 400s
+    // are owned entirely by the API validator before the service is reached.
     return new ViewApiException(
         ViewErrorCode.INTERNAL_VIEW_ERROR, "Unexpected view service failure", e);
   }

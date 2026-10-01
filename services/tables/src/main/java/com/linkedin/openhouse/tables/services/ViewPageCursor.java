@@ -5,9 +5,9 @@ import lombok.Getter;
 import lombok.ToString;
 
 /**
- * Opaque pagination cursor state (plan &sect;8, R3): the request database and canonical sort it was
- * issued for, the fixed internal source-page size, the current source-page index, and the
- * within-page offset at which to resume.
+ * Opaque pagination cursor state: the request database and canonical sort it was issued for, the
+ * fixed internal source-page size, the current source-page index, and the within-page offset at
+ * which to resume.
  */
 @Getter
 @EqualsAndHashCode
