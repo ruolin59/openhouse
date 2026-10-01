@@ -1022,6 +1022,51 @@ public class ViewsManagedFailureAuditTest {
     return MockMvcRequestBuilders.delete(VIEW_PATH).accept(MediaType.APPLICATION_JSON);
   }
 
+  /**
+   * A representations array whose elements are bare or nested SQL strings fails binding, but the
+   * request audit still parses the body; that SQL must not reach any surface.
+   */
+  @Test
+  public void primitiveAndNestedArrayRepresentationsSqlNeverReachesAuditWireOrLogs()
+      throws Exception {
+    for (String representations :
+        new String[] {
+          "[\"" + SECRET_SQL + "\"]",
+          "[[\"" + SECRET_SQL + "\"]]",
+          "[{\"type\":\"sql\",\"dialect\":\"spark\",\"sql\":\"ok\"},\"" + SECRET_SQL + "\"]"
+        }) {
+      Mockito.reset(serviceAuditHandler);
+      String body =
+          "{\"databaseId\":\""
+              + ViewModelConstants.DATABASE_ID
+              + "\",\"viewId\":\""
+              + ViewModelConstants.VIEW_ID
+              + "\",\"schema\":\""
+              + SECRET_SCHEMA
+              + "\",\"representations\":"
+              + representations
+              + "}";
+
+      try (Log4j2LogCapture logs = new Log4j2LogCapture()) {
+        MvcResult result =
+            expectNoCauseOrStacktrace(
+                    mvc.perform(
+                        MockMvcRequestBuilders.post(VIEWS_PATH)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body)
+                            .accept(MediaType.APPLICATION_JSON)
+                            .header("Authorization", "Bearer " + jwtAccessToken)))
+                .andExpect(status().isBadRequest())
+                .andReturn();
+
+        assertNoSensitive(result.getResponse().getContentAsString(), logs.renderedEvents());
+      }
+      AuditEventInspection.assertNoSensitiveProperties(captureServiceAudit(), SECRETS);
+    }
+    verify(viewAuditHandler, never()).audit(any(ViewAuditEvent.class));
+    Mockito.verifyNoInteractions(viewRepository, opaHandler);
+  }
+
   private static ResultActions expectNoCauseOrStacktrace(ResultActions actions) throws Exception {
     return actions
         .andExpect(jsonPath("$.cause").doesNotExist())

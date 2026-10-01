@@ -194,4 +194,32 @@ public class ViewRequestPayloadRedactorTest {
     Assertions.assertFalse(rendered.contains("SQL_SECRET"), rendered);
     Assertions.assertFalse(rendered.contains("SCHEMA_SECRET"), rendered);
   }
+
+  /**
+   * Inside a representations array, a malformed element that is not a representation object (a bare
+   * SQL string, or SQL nested in another array) must not carry SQL into the audit. Failing closed
+   * (throwing, so the audit drops the payload) is equally acceptable.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "{\"representations\": [\"SELECT SQL_ARRAY_SECRET\"], \"schema\": \"SCHEMA_SECRET\"}",
+        "{\"representations\": [[\"SELECT SQL_ARRAY_SECRET\"]], \"schema\": \"SCHEMA_SECRET\"}",
+        "{\"representations\": [[{\"sql\": \"SELECT SQL_ARRAY_SECRET\"}]],"
+            + " \"schema\": \"SCHEMA_SECRET\"}",
+        "{\"representations\": [{\"type\": \"sql\", \"sql\": \"ok\"},"
+            + " \"SELECT SQL_ARRAY_SECRET\"], \"schema\": \"SCHEMA_SECRET\"}"
+      })
+  public void malformedRepresentationArrayElementsNeverRetainSql(String body) {
+    JsonElement redacted;
+    try {
+      redacted = redactor.redact(JsonParser.parseString(body));
+    } catch (RuntimeException failClosed) {
+      return;
+    }
+
+    String rendered = redacted.toString();
+    Assertions.assertFalse(rendered.contains("SQL_ARRAY_SECRET"), rendered);
+    Assertions.assertFalse(rendered.contains("SCHEMA_SECRET"), rendered);
+  }
 }
