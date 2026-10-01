@@ -16,10 +16,10 @@ import lombok.ToString;
  * OpenHouseInternalViewRepository#commitCreate}/{@code #commitReplace} to the service's audit
  * emission, without a reread and without parsing the UUID out of the metadata path.
  *
- * <p>Lives in the repository package: it is an internal repository&rarr;service boundary type, not
- * a wire/response type. {@link #getDto()} is the unchanged public service/wire response shape;
- * {@link #getCommittedViewUuid()} and {@link #isCreated()} exist only for audit emission and the
- * public {@code Pair<ViewDto, Boolean>} status selection.
+ * <p>Lives in the repository package: it is an internal repository-to-service boundary type, not a
+ * wire/response type. {@link #getDto()} is the unchanged public service/wire response shape; {@link
+ * #getCommittedViewUuid()} and {@link #isCreated()} exist only for audit emission and the public
+ * {@code Pair<ViewDto, Boolean>} status selection.
  */
 @Builder(toBuilder = true)
 @Getter

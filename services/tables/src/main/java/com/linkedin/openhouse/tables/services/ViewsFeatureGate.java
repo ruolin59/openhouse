@@ -11,9 +11,9 @@ import org.springframework.stereotype.Component;
  *
  * <p>Default off: with no matching {@code views} {@link
  * com.linkedin.openhouse.tables.toggle.model.TableToggleRule} the gate reports disabled. Enabling a
- * database is an external administrative rollout prerequisite &mdash; an operator provisions the
- * rule directly in the HTS toggle-rule store out of band; there is no supported write API and none
- * is added here.
+ * database is an external administrative rollout prerequisite: an operator provisions the rule
+ * directly in the HTS toggle-rule store out of band; there is no supported write API and none is
+ * added here.
  *
  * <p>Calls only {@link TableFeatureToggle#isFeatureActivated(String, String, String)}, never {@link
  * TableFeatureToggle#isFeatureActivatedWithOverride}, so a user-writable {@code views.enabled}

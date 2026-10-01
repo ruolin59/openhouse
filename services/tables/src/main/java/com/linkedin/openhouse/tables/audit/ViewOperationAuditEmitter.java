@@ -18,9 +18,9 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 
 /**
  * Service-boundary operation-audit emitter. Emitted directly from {@code ViewsServiceImpl} using
- * the prepared capture and the commit outcome &mdash; never a handler aspect, which cannot recover
- * a DELETE's UUID/old pointer from a void response, or see the pre-write pointer for REPLACE,
- * without a forbidden second read.
+ * the prepared capture and the commit outcome; never a handler aspect, which cannot recover a
+ * DELETE's UUID/old pointer from a void response, or see the pre-write pointer for REPLACE, without
+ * a forbidden second read.
  *
  * <p>Every field is populated only from context actually reached: an outcome supplies the new
  * pointer and the create UUID; the prepared capture supplies the prior identity/pointer when a row
@@ -92,8 +92,8 @@ public class ViewOperationAuditEmitter {
    *
    * <p>Deliberate redaction deviation from {@code ServiceAuditAspect}: that aspect logs its caught
    * exception; this event may carry {@code sql}/{@code schema}/CAS-token context, so neither the
-   * throwable, its message, nor a stacktrace is logged here &mdash; only the safe enum status and
-   * the opaque correlation id are.
+   * throwable, its message, nor a stacktrace is logged here; only the safe enum status and the
+   * opaque correlation id are.
    */
   private void auditSafely(ViewAuditEvent event) {
     try {
@@ -138,9 +138,9 @@ public class ViewOperationAuditEmitter {
   /**
    * Reads the same inbound {@code session-id} header {@code ServiceAuditAspect} does, from the
    * request-bound context on the same request thread the emitter is always called from
-   * (synchronously, inside the controller&rarr;service call), for success, early-failure, and
-   * UNKNOWN alike. No new header, no generated id, no injected dependency: a unit context with no
-   * bound request simply yields null, never a failure.
+   * (synchronously, inside the controller-to-service call), for success, early-failure, and UNKNOWN
+   * alike. No new header, no generated id, no injected dependency: a unit context with no bound
+   * request simply yields null, never a failure.
    */
   private static String currentSessionId() {
     RequestAttributes attributes = RequestContextHolder.getRequestAttributes();

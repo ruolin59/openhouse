@@ -33,11 +33,15 @@ import org.springframework.stereotype.Component;
 
 /**
  * Default {@link ViewsService}, modeled after {@code TablesServiceImpl} without reusing it: no
- * snapshots, partition specs, sort orders, or retention semantics. Per-intent order: gate &rarr;
- * database existence &rarr; single prepared capture &rarr; authorization (reads none, writes
- * database-level) &rarr; resource type / base-version &rarr; admission &rarr; allocate (create
- * only) &rarr; commit &rarr; server-owned {@code clusterId} &rarr; audit and typed,
- * cause-preserving exception translation.
+ * snapshots, partition specs, sort orders, or retention semantics. Per-intent order:
+ *
+ * <pre>
+ * gate -> database existence -> single prepared capture -> authorization
+ *      (reads none, writes database-level)
+ *      -> resource type / base-version -> admission -> allocate (create only)
+ *      -> commit -> server-owned clusterId -> audit and typed, cause-preserving
+ *      exception translation
+ * </pre>
  */
 @Component
 @ConditionalOnClass(name = "org.apache.iceberg.view.ViewMetadata")

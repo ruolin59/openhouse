@@ -4,11 +4,16 @@ import com.linkedin.openhouse.tables.authorization.Privileges;
 import org.springframework.stereotype.Component;
 
 /**
- * Maps a view write intent to the existing table privilege it is authorized against: create and
- * absent-PUT-create &rarr; {@link Privileges#CREATE_TABLE}; replace &rarr; {@link
- * Privileges#UPDATE_TABLE_METADATA}; drop &rarr; {@link Privileges#DELETE_TABLE}. All three are
- * checked at the database level (checkDatabasePrivilege), reusing existing production role-data. No
- * view write ever sends a {@code *_VIEW} privilege name to OPA.
+ * Maps a view write intent to the existing table privilege it is authorized against:
+ *
+ * <pre>
+ * create / absent-PUT-create -> CREATE_TABLE
+ * replace                    -> UPDATE_TABLE_METADATA
+ * drop                       -> DELETE_TABLE
+ * </pre>
+ *
+ * All three are checked at the database level (checkDatabasePrivilege), reusing existing production
+ * role-data. No view write ever sends a {@code *_VIEW} privilege name to OPA.
  */
 @Component
 public class ViewWritePrivilegeMapper {

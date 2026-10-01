@@ -15,7 +15,7 @@ import org.springframework.util.AntPathMatcher;
  *
  * <p>{@link com.linkedin.openhouse.common.audit.ServiceAuditAspect} audits the raw request URI
  * (including the query string) of every controller call, which for the view list route would retain
- * the caller's opaque {@code pageToken} verbatim &mdash; the same value {@link
+ * the caller's opaque {@code pageToken} verbatim, the same value {@link
  * com.linkedin.openhouse.tables.services.ViewPageTokenCodec} treats as an internal cursor, not a
  * value safe to retain in an audit trail. This replaces only the {@code pageToken} query value with
  * {@link #REDACTED_VALUE}; every other query field (notably {@code sortBy} and {@code size}) is
@@ -25,11 +25,11 @@ import org.springframework.util.AntPathMatcher;
  * against a controller's {@code @RequestParam}, so {@code %70ageToken} binds to the same {@code
  * pageToken} parameter as the literal spelling. Matching only the literal {@code pageToken=} key
  * would therefore miss an encoded (or duplicated, mixed literal/encoded) alias of the exact same
- * bound parameter &mdash; not a different parameter, just an alternate wire spelling of it. Each
- * {@code &}-delimited parameter is inspected independently: its name is decoded and compared, and
- * only a parameter whose name is undecodable or whose decoded name exactly matches {@code
- * pageToken} has its value replaced; every other parameter (and the rest of a mixed query) is left
- * exactly as sent.
+ * bound parameter, not a different parameter, just an alternate wire spelling of it. Each {@code
+ * &}-delimited parameter is inspected independently: its name is decoded and compared, and only a
+ * parameter whose name is undecodable or whose decoded name exactly matches {@code pageToken} has
+ * its value replaced; every other parameter (and the rest of a mixed query) is left exactly as
+ * sent.
  */
 @Component
 public class ViewRequestUriRedactor implements ServiceAuditUriRedactor {
