@@ -11,6 +11,8 @@ import org.springframework.stereotype.Component;
 public class DummyViewAuditHandler implements AuditHandler<ViewAuditEvent> {
   @Override
   public void audit(ViewAuditEvent event) {
-    log.info("View audit event: \n" + event.toJson());
+    if (log.isDebugEnabled()) {
+      log.debug("View audit event: \n" + event.toJson());
+    }
   }
 }
