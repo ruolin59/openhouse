@@ -1,5 +1,6 @@
 package com.linkedin.openhouse.tables.audit;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
@@ -68,11 +69,7 @@ public class ViewRequestPayloadRedactor implements ServiceAuditPayloadRedactor {
     }
     JsonElement representations = redacted.get(REPRESENTATIONS_FIELD);
     if (representations != null && representations.isJsonArray()) {
-      for (JsonElement representation : representations.getAsJsonArray()) {
-        if (representation.isJsonObject() && representation.getAsJsonObject().has(SQL_FIELD)) {
-          representation.getAsJsonObject().add(SQL_FIELD, new JsonPrimitive(REDACTED_VALUE));
-        }
-      }
+      redactRepresentationsArray(representations.getAsJsonArray());
     } else if (representations != null) {
       // A well-formed request never reaches here (representations is always an array), but the
       // aspect audits whatever JSON the caller actually sent, including a malformed body Jackson
@@ -83,5 +80,29 @@ public class ViewRequestPayloadRedactor implements ServiceAuditPayloadRedactor {
       redacted.add(REPRESENTATIONS_FIELD, new JsonPrimitive(REDACTED_VALUE));
     }
     return redacted;
+  }
+
+  /**
+   * Redacts every array element in place, preserving the array's length and every element's own
+   * position. A well-formed element is a representation object, whose {@code sql} field (if
+   * present) is redacted individually, exactly as before. Any other element shape — a bare string,
+   * a nested array, a number, or a boolean — cannot be interpreted as a representation, and a
+   * malformed body can place raw SQL directly in that position (e.g. {@code ["SELECT ..."]} or a
+   * nested {@code [["SELECT ..."]]}); such an element is replaced wholesale rather than recursed
+   * into, since nothing at that position is a known-safe field to preserve. A {@code null} element
+   * carries nothing to redact and is left unchanged.
+   */
+  private static void redactRepresentationsArray(JsonArray representations) {
+    for (int i = 0; i < representations.size(); i++) {
+      JsonElement representation = representations.get(i);
+      if (representation.isJsonObject()) {
+        JsonObject representationObject = representation.getAsJsonObject();
+        if (representationObject.has(SQL_FIELD)) {
+          representationObject.add(SQL_FIELD, new JsonPrimitive(REDACTED_VALUE));
+        }
+      } else if (!representation.isJsonNull()) {
+        representations.set(i, new JsonPrimitive(REDACTED_VALUE));
+      }
+    }
   }
 }
