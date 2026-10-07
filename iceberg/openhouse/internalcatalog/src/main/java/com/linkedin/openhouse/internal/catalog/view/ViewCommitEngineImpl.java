@@ -256,6 +256,10 @@ public class ViewCommitEngineImpl implements ViewCommitEngine {
       return ViewCommitResult.builder()
           .pointer(toViewPointer(row))
           .viewUuid(current.uuid())
+          .viewCreator(
+              current
+                  .properties()
+                  .getOrDefault(getCanonicalFieldName("tableCreator"), intent.getCreator()))
           .lastModifiedTime(readLongProperty(current, "lastModifiedTime"))
           .created(false)
           .metadataChanged(false)
@@ -350,6 +354,7 @@ public class ViewCommitEngineImpl implements ViewCommitEngine {
     return ViewCommitResult.builder()
         .pointer(toViewPointer(saved))
         .viewUuid(metadata.uuid())
+        .viewCreator(metadata.properties().get(getCanonicalFieldName("tableCreator")))
         .lastModifiedTime(lastModifiedTime)
         .created(isCreate)
         .metadataChanged(true)
