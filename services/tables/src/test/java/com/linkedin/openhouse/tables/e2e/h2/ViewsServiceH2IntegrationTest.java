@@ -21,6 +21,7 @@ import com.linkedin.openhouse.tables.audit.model.OperationStatus;
 import com.linkedin.openhouse.tables.audit.model.ViewAuditEvent;
 import com.linkedin.openhouse.tables.exception.ViewApiException;
 import com.linkedin.openhouse.tables.exception.ViewErrorCode;
+import com.linkedin.openhouse.tables.exception.ViewExceptionHandler;
 import com.linkedin.openhouse.tables.mock.properties.AuthorizationPropertiesInitializer;
 import com.linkedin.openhouse.tables.model.TableDto;
 import com.linkedin.openhouse.tables.model.TableDtoPrimaryKey;
@@ -40,8 +41,10 @@ import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.context.annotation.Bean;
 import org.springframework.http.MediaType;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ContextConfiguration;
@@ -51,7 +54,7 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
-@SpringBootTest(classes = SpringH2Application.class)
+@SpringBootTest(classes = {SpringH2Application.class, ViewsServiceH2IntegrationTest.Config.class})
 @AutoConfigureMockMvc
 @ContextConfiguration(
     initializers = {
@@ -70,9 +73,13 @@ public class ViewsServiceH2IntegrationTest {
   @Autowired private ClusterProperties clusterProperties;
   @Autowired private StorageManager storageManager;
   @Autowired private OpenHouseInternalRepository openHouseInternalRepository;
-  // A spy over the real adapter, so a test can fail one typed DELETE while every other call,
-  // including the real prepared capture, still reaches H2. Stubs reset after each test.
-  @SpyBean private HouseTableRepository houseTableRepository;
+  // A spy over the @Primary H2 repository that the view repository actually uses, so a test can
+  // fail one typed DELETE while every other call, including the real capture, still reaches H2.
+  // Named because a by-type spy can land on the unconfigured HTS HTTP adapter bean instead.
+  // Stubs reset after each test.
+  @SpyBean(name = "houseTablesH2Repository")
+  private HouseTableRepository houseTableRepository;
+
   @MockBean private ViewsFeatureGate viewsFeatureGate;
   @MockBean private AuditHandler<ViewAuditEvent> viewAuditHandler;
   // Mock admission is a no-op pass-through unless a test scripts a rejection.
@@ -698,6 +705,15 @@ public class ViewsServiceH2IntegrationTest {
           .filter(Files::isRegularFile)
           .filter(path -> path.getFileName().toString().endsWith(".metadata.json"))
           .count();
+    }
+  }
+
+  /** The view advice the production application scans, which this H2 application does not. */
+  @TestConfiguration
+  static class Config {
+    @Bean
+    ViewExceptionHandler viewExceptionHandler() {
+      return new ViewExceptionHandler();
     }
   }
 }
