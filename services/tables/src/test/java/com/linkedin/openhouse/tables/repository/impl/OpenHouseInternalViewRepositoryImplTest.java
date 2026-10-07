@@ -1,5 +1,6 @@
 package com.linkedin.openhouse.tables.repository.impl;
 
+import static com.linkedin.openhouse.internal.catalog.mapper.HouseTableSerdeUtils.getCanonicalFieldName;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -15,10 +16,12 @@ import static org.mockito.Mockito.when;
 import com.linkedin.openhouse.cluster.storage.Storage;
 import com.linkedin.openhouse.cluster.storage.StorageType;
 import com.linkedin.openhouse.cluster.storage.selector.StorageSelector;
+import com.linkedin.openhouse.internal.catalog.fileio.FileIOManager;
 import com.linkedin.openhouse.internal.catalog.model.HouseTable;
 import com.linkedin.openhouse.internal.catalog.model.HouseTablePrimaryKey;
 import com.linkedin.openhouse.internal.catalog.repository.HouseTableRepository;
 import com.linkedin.openhouse.internal.catalog.view.ViewCommitEngine;
+import com.linkedin.openhouse.internal.catalog.view.ViewMetadataCodec;
 import com.linkedin.openhouse.internal.catalog.view.model.SqlViewRepresentationIntent;
 import com.linkedin.openhouse.internal.catalog.view.model.ViewCommitIntent;
 import com.linkedin.openhouse.internal.catalog.view.model.ViewCommitResult;
@@ -27,10 +30,14 @@ import com.linkedin.openhouse.tables.model.ViewDto;
 import com.linkedin.openhouse.tables.model.ViewModelConstants;
 import com.linkedin.openhouse.tables.repository.ViewCommitOutcome;
 import java.util.Collections;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.apache.iceberg.SchemaParser;
 import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.io.FileIO;
+import org.apache.iceberg.io.InputFile;
+import org.apache.iceberg.view.ViewMetadata;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
@@ -49,14 +56,35 @@ public class OpenHouseInternalViewRepositoryImplTest {
       "file:/warehouse/my_database/my_view/metadata/00013-committed.metadata.json";
 
   @Test
-  public void findByIdUsesTypedViewLookupAndMapsPointerWithoutMetadataRead() {
+  public void findByIdUsesHtsPointerAndReadsOnlyPointerMetadataFields() {
     HouseTable viewRow = capturedViewRow();
     HouseTableRepository houseTableRepository = Mockito.mock(HouseTableRepository.class);
     when(houseTableRepository.findViewById(any(HouseTablePrimaryKey.class)))
         .thenReturn(Optional.of(viewRow));
     ViewCommitEngine engine = Mockito.mock(ViewCommitEngine.class);
+    FileIOManager fileIOManager = Mockito.mock(FileIOManager.class);
+    FileIO fileIO = Mockito.mock(FileIO.class);
+    InputFile inputFile = Mockito.mock(InputFile.class);
+    ViewMetadataCodec metadataCodec = Mockito.mock(ViewMetadataCodec.class);
+    ViewMetadata metadata = Mockito.mock(ViewMetadata.class);
+    when(fileIOManager.getFileIO(StorageType.LOCAL)).thenReturn(fileIO);
+    when(fileIO.newInputFile(CAPTURED_POINTER)).thenReturn(inputFile);
+    when(metadataCodec.read(inputFile)).thenReturn(metadata);
+    when(metadata.properties())
+        .thenReturn(
+            Map.of(
+                getCanonicalFieldName("tableCreator"),
+                ViewModelConstants.VIEW_CREATOR,
+                getCanonicalFieldName("lastModifiedTime"),
+                String.valueOf(ViewModelConstants.LAST_MODIFIED_TIME)));
     OpenHouseInternalViewRepositoryImpl repository =
-        newRepository(houseTableRepository, engine, Mockito.mock(StorageSelector.class));
+        newRepository(
+            houseTableRepository,
+            engine,
+            fileIOManager,
+            metadataCodec,
+            new StorageType(),
+            Mockito.mock(StorageSelector.class));
 
     ViewDto result =
         repository.findById(ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID);
@@ -64,8 +92,16 @@ public class OpenHouseInternalViewRepositoryImplTest {
     verify(houseTableRepository, times(1)).findViewById(any(HouseTablePrimaryKey.class));
     verify(houseTableRepository, never()).findEntityById(any(HouseTablePrimaryKey.class));
     verify(engine, never()).loadView(any(), any());
+    verify(metadataCodec).read(inputFile);
     org.junit.jupiter.api.Assertions.assertEquals(ViewModelConstants.VIEW_ID, result.getViewId());
     org.junit.jupiter.api.Assertions.assertEquals(CAPTURED_POINTER, result.getMetadataLocation());
+    org.junit.jupiter.api.Assertions.assertEquals(
+        ViewModelConstants.VIEW_CREATOR, result.getViewCreator());
+    org.junit.jupiter.api.Assertions.assertEquals(
+        ViewModelConstants.LAST_MODIFIED_TIME, result.getLastModifiedTime());
+    org.junit.jupiter.api.Assertions.assertNull(result.getSchema());
+    org.junit.jupiter.api.Assertions.assertNull(result.getRepresentations());
+    org.junit.jupiter.api.Assertions.assertNull(result.getViewProperties());
   }
 
   @Test
@@ -73,11 +109,9 @@ public class OpenHouseInternalViewRepositoryImplTest {
     HouseTableRepository houseTableRepository = Mockito.mock(HouseTableRepository.class);
     when(houseTableRepository.findViewById(any(HouseTablePrimaryKey.class)))
         .thenReturn(Optional.empty());
+    ViewCommitEngine engine = Mockito.mock(ViewCommitEngine.class);
     OpenHouseInternalViewRepositoryImpl repository =
-        newRepository(
-            houseTableRepository,
-            Mockito.mock(ViewCommitEngine.class),
-            Mockito.mock(StorageSelector.class));
+        newRepository(houseTableRepository, engine, Mockito.mock(StorageSelector.class));
 
     org.junit.jupiter.api.Assertions.assertThrows(
         com.linkedin.openhouse.tables.exception.ViewApiException.class,
@@ -112,31 +146,34 @@ public class OpenHouseInternalViewRepositoryImplTest {
   }
 
   @Test
-  public void searchViewsMapsEnginePointerPageAndPreservesContinuationMetadata() {
+  public void searchViewsUsesDirectHtsPointerPageAndPreservesContinuationMetadata() {
     ViewCommitEngine engine = Mockito.mock(ViewCommitEngine.class);
+    HouseTableRepository houseTableRepository = Mockito.mock(HouseTableRepository.class);
     Pageable requested = PageRequest.of(0, 2, Sort.by("tableId"));
-    when(engine.listViews(eq(ViewModelConstants.DATABASE_ID), any(Pageable.class)))
+    when(houseTableRepository.findAllViewsByDatabaseId(
+            eq(ViewModelConstants.DATABASE_ID), any(Pageable.class)))
         .thenReturn(
             new PageImpl<>(
                 Collections.singletonList(
-                    ViewPointer.builder()
+                    HouseTable.builder()
                         .databaseId(ViewModelConstants.DATABASE_ID)
-                        .viewId(ViewModelConstants.VIEW_ID)
-                        .metadataLocation(CAPTURED_POINTER)
+                        .tableId(ViewModelConstants.VIEW_ID)
+                        .tableLocation(CAPTURED_POINTER)
                         .storageType("local")
-                        .creationTime(ViewModelConstants.CREATION_TIME)
+                        .entityType("VIEW")
                         .build()),
                 requested,
                 5));
     OpenHouseInternalViewRepositoryImpl repository =
-        newRepository(
-            Mockito.mock(HouseTableRepository.class), engine, Mockito.mock(StorageSelector.class));
+        newRepository(houseTableRepository, engine, Mockito.mock(StorageSelector.class));
 
     Page<ViewDto> results = repository.searchViews(ViewModelConstants.DATABASE_ID, requested);
 
     ArgumentCaptor<Pageable> forwarded = ArgumentCaptor.forClass(Pageable.class);
-    verify(engine).listViews(eq(ViewModelConstants.DATABASE_ID), forwarded.capture());
+    verify(houseTableRepository)
+        .findAllViewsByDatabaseId(eq(ViewModelConstants.DATABASE_ID), forwarded.capture());
     assertEquals(requested, forwarded.getValue());
+    verify(engine, never()).listViews(any(), any());
     verify(engine, never()).loadView(any(), any());
     assertEquals(1, results.getContent().size());
     assertEquals(ViewModelConstants.VIEW_ID, results.getContent().get(0).getViewId());
@@ -151,15 +188,16 @@ public class OpenHouseInternalViewRepositoryImplTest {
   @Test
   public void searchViewsKeepsEmptyNonterminalAndTerminalPagesDistinct() {
     ViewCommitEngine engine = Mockito.mock(ViewCommitEngine.class);
+    HouseTableRepository houseTableRepository = Mockito.mock(HouseTableRepository.class);
     Pageable emptyNonterminal = PageRequest.of(1, 2, Sort.by("tableId"));
     Pageable terminal = PageRequest.of(2, 2, Sort.by("tableId"));
-    when(engine.listViews(ViewModelConstants.DATABASE_ID, emptyNonterminal))
+    when(houseTableRepository.findAllViewsByDatabaseId(
+            ViewModelConstants.DATABASE_ID, emptyNonterminal))
         .thenReturn(new PageImpl<>(Collections.emptyList(), emptyNonterminal, 6));
-    when(engine.listViews(ViewModelConstants.DATABASE_ID, terminal))
+    when(houseTableRepository.findAllViewsByDatabaseId(ViewModelConstants.DATABASE_ID, terminal))
         .thenReturn(new PageImpl<>(Collections.emptyList(), terminal, 4));
     OpenHouseInternalViewRepositoryImpl repository =
-        newRepository(
-            Mockito.mock(HouseTableRepository.class), engine, Mockito.mock(StorageSelector.class));
+        newRepository(houseTableRepository, engine, Mockito.mock(StorageSelector.class));
 
     Page<ViewDto> empty = repository.searchViews(ViewModelConstants.DATABASE_ID, emptyNonterminal);
     Page<ViewDto> last = repository.searchViews(ViewModelConstants.DATABASE_ID, terminal);
@@ -169,6 +207,7 @@ public class OpenHouseInternalViewRepositoryImplTest {
     assertTrue(empty.hasNext(), "An empty page is not proof of the end of the listing.");
     assertTrue(last.getContent().isEmpty());
     assertFalse(last.hasNext());
+    verify(engine, never()).listViews(any(), any());
     verify(engine, never()).loadView(any(), any());
   }
 
@@ -233,6 +272,7 @@ public class OpenHouseInternalViewRepositoryImplTest {
     org.junit.jupiter.api.Assertions.assertEquals(Boolean.FALSE, intent.getValue().getIsCreate());
     assertIntentCarriesRequestedDefinition(intent.getValue());
     assertEquals(COMMITTED_POINTER, result.getDto().getMetadataLocation());
+    assertEquals(ViewModelConstants.VIEW_CREATOR, result.getDto().getViewCreator());
     assertEquals("view-uuid", result.getCommittedViewUuid());
     assertFalse(result.isCreated());
     verify(storageSelector, never()).selectStorage(any(), any());
@@ -302,6 +342,7 @@ public class OpenHouseInternalViewRepositoryImplTest {
     assertTrue(outcome.isCreated());
     assertEquals(COMMITTED_POINTER, outcome.getDto().getMetadataLocation());
     assertEquals(ViewModelConstants.VIEW_ID, outcome.getDto().getViewId());
+    assertEquals("alice", outcome.getDto().getViewCreator());
     verify(houseTableRepository, never()).findEntityById(any(HouseTablePrimaryKey.class));
     verify(houseTableRepository, never()).findViewById(any(HouseTablePrimaryKey.class));
   }
@@ -368,6 +409,7 @@ public class OpenHouseInternalViewRepositoryImplTest {
                 .creationTime(ViewModelConstants.CREATION_TIME)
                 .build())
         .viewUuid("view-uuid")
+        .viewCreator(ViewModelConstants.VIEW_CREATOR)
         .lastModifiedTime(ViewModelConstants.LAST_MODIFIED_TIME)
         .created(false)
         .metadataChanged(true)
@@ -396,6 +438,7 @@ public class OpenHouseInternalViewRepositoryImplTest {
                 .creationTime(ViewModelConstants.CREATION_TIME)
                 .build())
         .viewUuid(CREATED_RESULT_UUID)
+        .viewCreator("alice")
         .lastModifiedTime(ViewModelConstants.LAST_MODIFIED_TIME)
         .created(true)
         .metadataChanged(true)
@@ -406,7 +449,29 @@ public class OpenHouseInternalViewRepositoryImplTest {
       HouseTableRepository houseTableRepository,
       ViewCommitEngine engine,
       StorageSelector storageSelector) {
+    return newRepository(
+        houseTableRepository,
+        engine,
+        Mockito.mock(FileIOManager.class),
+        Mockito.mock(ViewMetadataCodec.class),
+        new StorageType(),
+        storageSelector);
+  }
+
+  private static OpenHouseInternalViewRepositoryImpl newRepository(
+      HouseTableRepository houseTableRepository,
+      ViewCommitEngine engine,
+      FileIOManager fileIOManager,
+      ViewMetadataCodec metadataCodec,
+      StorageType storageType,
+      StorageSelector storageSelector) {
     return new OpenHouseInternalViewRepositoryImpl(
-        houseTableRepository, engine, storageSelector, Mockito.mock(Storage.class));
+        houseTableRepository,
+        engine,
+        fileIOManager,
+        metadataCodec,
+        storageType,
+        storageSelector,
+        Mockito.mock(Storage.class));
   }
 }

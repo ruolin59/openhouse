@@ -1091,6 +1091,7 @@ public class ViewCommitEngineCommitTest {
     Assertions.assertEquals(DB, createdProperties.get(CatalogConstants.OPENHOUSE_DATABASEID_KEY));
     Assertions.assertEquals(
         ViewTestFixtures.CREATOR, createdProperties.get(getCanonicalFieldName("tableCreator")));
+    Assertions.assertEquals(ViewTestFixtures.CREATOR, created.getViewCreator());
     Assertions.assertNotNull(createdProperties.get(getCanonicalFieldName("creationTime")));
     Assertions.assertNotNull(createdProperties.get(getCanonicalFieldName("lastModifiedTime")));
     Assertions.assertEquals(
@@ -1138,6 +1139,7 @@ public class ViewCommitEngineCommitTest {
         harness.getViewCommitEngine().commit(changedReplaceOf(captureNeutral()));
     Map<String, String> replacedProperties =
         harness.readMetadata(replaced.getPointer().getMetadataLocation()).properties();
+    Assertions.assertEquals(ViewTestFixtures.CREATOR, replaced.getViewCreator());
 
     Assertions.assertEquals(
         created.getPointer().getMetadataLocation(),

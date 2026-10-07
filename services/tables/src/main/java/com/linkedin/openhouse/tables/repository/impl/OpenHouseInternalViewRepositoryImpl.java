@@ -1,13 +1,18 @@
 package com.linkedin.openhouse.tables.repository.impl;
 
+import static com.linkedin.openhouse.internal.catalog.mapper.HouseTableSerdeUtils.getCanonicalFieldName;
+
 import com.linkedin.openhouse.cluster.storage.Storage;
 import com.linkedin.openhouse.cluster.storage.StorageManager;
+import com.linkedin.openhouse.cluster.storage.StorageType;
 import com.linkedin.openhouse.cluster.storage.selector.StorageSelector;
 import com.linkedin.openhouse.common.schema.IcebergSchemaHelper;
+import com.linkedin.openhouse.internal.catalog.fileio.FileIOManager;
 import com.linkedin.openhouse.internal.catalog.model.HouseTable;
 import com.linkedin.openhouse.internal.catalog.model.HouseTablePrimaryKey;
 import com.linkedin.openhouse.internal.catalog.repository.HouseTableRepository;
 import com.linkedin.openhouse.internal.catalog.view.ViewCommitEngine;
+import com.linkedin.openhouse.internal.catalog.view.ViewMetadataCodec;
 import com.linkedin.openhouse.internal.catalog.view.model.SqlViewRepresentationIntent;
 import com.linkedin.openhouse.internal.catalog.view.model.ViewCommitIntent;
 import com.linkedin.openhouse.internal.catalog.view.model.ViewCommitResult;
@@ -28,6 +33,8 @@ import java.util.stream.Collectors;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.io.FileIO;
+import org.apache.iceberg.view.ViewMetadata;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -50,6 +57,12 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
 
   private final ViewCommitEngine viewCommitEngine;
 
+  private final FileIOManager fileIOManager;
+
+  private final ViewMetadataCodec viewMetadataCodec;
+
+  private final StorageType storageType;
+
   private final StorageSelector storageSelector;
 
   /**
@@ -63,10 +76,16 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
   public OpenHouseInternalViewRepositoryImpl(
       HouseTableRepository houseTableRepository,
       ViewCommitEngine viewCommitEngine,
+      FileIOManager fileIOManager,
+      ViewMetadataCodec viewMetadataCodec,
+      StorageType storageType,
       StorageSelector storageSelector,
       Storage defaultStorage) {
     this.houseTableRepository = houseTableRepository;
     this.viewCommitEngine = viewCommitEngine;
+    this.fileIOManager = fileIOManager;
+    this.viewMetadataCodec = viewMetadataCodec;
+    this.storageType = storageType;
     this.storageSelector = storageSelector;
     this.defaultStorage = defaultStorage;
   }
@@ -105,17 +124,18 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
 
   @Override
   public Page<ViewDto> searchViews(String databaseId, Pageable pageable) {
-    Page<ViewPointer> enginePage = viewCommitEngine.listViews(databaseId, pageable);
+    Page<HouseTable> pointerPage =
+        houseTableRepository.findAllViewsByDatabaseId(databaseId, pageable);
     List<ViewDto> dtos =
-        enginePage.getContent().stream()
+        pointerPage.getContent().stream()
             .map(
-                pointer ->
+                row ->
                     ViewDto.builder()
-                        .viewId(pointer.getViewId())
-                        .databaseId(pointer.getDatabaseId())
+                        .viewId(row.getTableId())
+                        .databaseId(row.getDatabaseId())
                         .build())
             .collect(Collectors.toList());
-    return new PageImpl<>(dtos, pageable, enginePage.getTotalElements());
+    return new PageImpl<>(dtos, pageable, pointerPage.getTotalElements());
   }
 
   @Override
@@ -146,7 +166,7 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
 
     ViewCommitResult result = viewCommitEngine.commit(intent);
     return ViewCommitOutcome.builder()
-        .dto(toCommittedDto(databaseId, viewId, actingPrincipal, result))
+        .dto(toCommittedDto(databaseId, viewId, result))
         .committedViewUuid(result.getViewUuid())
         .created(result.isCreated())
         .build();
@@ -168,9 +188,7 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
 
     ViewCommitResult result = viewCommitEngine.commit(intent);
     return ViewCommitOutcome.builder()
-        .dto(
-            toCommittedDto(
-                databaseId, viewId, prepared.getViewBaseRow().get().getTableCreator(), result))
+        .dto(toCommittedDto(databaseId, viewId, result))
         .committedViewUuid(result.getViewUuid())
         .created(result.isCreated())
         .build();
@@ -233,37 +251,51 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
     return Namespace.of(defaultNamespace.toArray(new String[0]));
   }
 
-  private static ViewDto toCommittedDto(
-      String databaseId, String viewId, String creator, ViewCommitResult result) {
+  private static ViewDto toCommittedDto(String databaseId, String viewId, ViewCommitResult result) {
     ViewPointer pointer = result.getPointer();
     return ViewDto.builder()
         .databaseId(databaseId)
         .viewId(viewId)
         .metadataLocation(pointer.getMetadataLocation())
         .viewVersion(pointer.getMetadataLocation())
-        .viewCreator(creator)
+        .viewCreator(result.getViewCreator())
         .creationTime(pointer.getCreationTime())
         .lastModifiedTime(result.getLastModifiedTime())
         .build();
   }
 
-  private static ViewDto toPointerDto(HouseTable row) {
+  private ViewDto toPointerDto(HouseTable row) {
+    ViewMetadata metadata = readViewMetadata(row);
+    String creator = metadata.properties().get(getCanonicalFieldName("tableCreator"));
+    if (StringUtils.isBlank(creator)) {
+      throw new IllegalStateException(
+          "Corrupt view metadata for "
+              + row.getDatabaseId()
+              + "."
+              + row.getTableId()
+              + ": creator is missing");
+    }
     return ViewDto.builder()
         .viewId(row.getTableId())
         .databaseId(row.getDatabaseId())
         .metadataLocation(row.getTableLocation())
         .viewVersion(row.getTableLocation())
-        .viewCreator(row.getTableCreator())
+        .viewCreator(creator)
         .creationTime(row.getCreationTime())
-        .lastModifiedTime(row.getLastModifiedTime())
+        .lastModifiedTime(readLongProperty(metadata, "lastModifiedTime"))
         .build();
   }
 
-  /**
-   * A valid persisted VIEW row always carries both facts; requiring both is this completeness
-   * invariant, not an optional new field. Corrupt persisted metadata is a sanitized server fault,
-   * never reinterpreted as absence; this loads no view metadata, only the already-fetched HTS row.
-   */
+  private ViewMetadata readViewMetadata(HouseTable row) {
+    FileIO fileIO = fileIOManager.getFileIO(storageType.fromString(row.getStorageType()));
+    return viewMetadataCodec.read(fileIO.newInputFile(row.getTableLocation()));
+  }
+
+  private static long readLongProperty(ViewMetadata metadata, String propertyName) {
+    String value = metadata.properties().get(getCanonicalFieldName(propertyName));
+    return value == null ? 0L : Long.parseLong(value);
+  }
+
   private static void requireCompletePersistedPointer(HouseTable row) {
     if (StringUtils.isBlank(row.getTableLocation()) || StringUtils.isBlank(row.getStorageType())) {
       throw new IllegalStateException(
@@ -293,11 +325,17 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
     public OpenHouseInternalViewRepository openHouseInternalViewRepository(
         HouseTableRepository houseTableRepository,
         ViewCommitEngine viewCommitEngine,
+        FileIOManager fileIOManager,
+        ViewMetadataCodec viewMetadataCodec,
+        StorageType storageType,
         StorageSelector storageSelector,
         StorageManager storageManager) {
       return new OpenHouseInternalViewRepositoryImpl(
           houseTableRepository,
           viewCommitEngine,
+          fileIOManager,
+          viewMetadataCodec,
+          storageType,
           storageSelector,
           storageManager.getDefaultStorage());
     }
