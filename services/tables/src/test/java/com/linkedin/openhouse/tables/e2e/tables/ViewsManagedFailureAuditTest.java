@@ -39,6 +39,7 @@ import com.linkedin.openhouse.tables.services.ViewPaginationAdapter;
 import com.linkedin.openhouse.tables.services.ViewsFeatureGate;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.lang.reflect.Method;
 import java.net.URI;
 import java.util.Arrays;
@@ -46,6 +47,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import org.apache.iceberg.exceptions.CommitStateUnknownException;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -120,6 +122,7 @@ public class ViewsManagedFailureAuditTest {
   @MockBean private AuditHandler<ViewAuditEvent> viewAuditHandler;
 
   private String jwtAccessToken;
+  private SimpleMeterRegistry auditMetrics;
 
   @BeforeEach
   public void setup() throws Exception {
@@ -138,6 +141,15 @@ public class ViewsManagedFailureAuditTest {
                 DatabaseDto.builder().databaseId(ViewModelConstants.DATABASE_ID).build()));
     when(viewRepository.prepareWrite(ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID))
         .thenReturn(PreparedViewOperation.observedAbsence());
+    // A closed registry from an evicted Spring context may still be the composite's first child.
+    auditMetrics = new SimpleMeterRegistry();
+    Metrics.addRegistry(auditMetrics);
+  }
+
+  @AfterEach
+  void closeAuditMetrics() {
+    Metrics.removeRegistry(auditMetrics);
+    auditMetrics.close();
   }
 
   @Test
@@ -940,9 +952,9 @@ public class ViewsManagedFailureAuditTest {
     assertEquals(expectedStatus, captureServiceAudit().getStatusCode());
   }
 
-  private static double failedServiceAuditCount() {
+  private double failedServiceAuditCount() {
     Counter counter =
-        Metrics.globalRegistry
+        auditMetrics
             .find(MetricsConstant.SERVICE_AUDIT + "_" + MetricsConstant.FAILED_SERVICE_AUDIT)
             .counter();
     return counter == null ? 0.0 : counter.count();
