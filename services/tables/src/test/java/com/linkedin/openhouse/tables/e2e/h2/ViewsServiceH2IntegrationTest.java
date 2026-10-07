@@ -15,6 +15,7 @@ import com.linkedin.openhouse.common.test.cluster.PropertyOverrideContextInitial
 import com.linkedin.openhouse.internal.catalog.model.HouseTable;
 import com.linkedin.openhouse.internal.catalog.model.HouseTablePrimaryKey;
 import com.linkedin.openhouse.internal.catalog.repository.HouseTableRepository;
+import com.linkedin.openhouse.internal.catalog.repository.exception.HouseTableRepositoryStateUnknownException;
 import com.linkedin.openhouse.tables.api.spec.v0.request.CreateUpdateViewRequestBody;
 import com.linkedin.openhouse.tables.audit.model.OperationStatus;
 import com.linkedin.openhouse.tables.audit.model.ViewAuditEvent;
@@ -69,7 +70,9 @@ public class ViewsServiceH2IntegrationTest {
   @Autowired private ClusterProperties clusterProperties;
   @Autowired private StorageManager storageManager;
   @Autowired private OpenHouseInternalRepository openHouseInternalRepository;
-  @Autowired private HouseTableRepository houseTableRepository;
+  // A spy over the real adapter, so a test can fail one typed DELETE while every other call,
+  // including the real prepared capture, still reaches H2. Stubs reset after each test.
+  @SpyBean private HouseTableRepository houseTableRepository;
   @MockBean private ViewsFeatureGate viewsFeatureGate;
   @MockBean private AuditHandler<ViewAuditEvent> viewAuditHandler;
   // Mock admission is a no-op pass-through unless a test scripts a rejection.
@@ -468,6 +471,98 @@ public class ViewsServiceH2IntegrationTest {
         .andExpect(status().isNotFound());
   }
 
+  /**
+   * The real adapter-to-bridge-to-service chain: only the typed DELETE is ambiguous, after a real
+   * typed capture. It is one attempt, reported as UNKNOWN with the captured identity and old
+   * pointer only, as a sanitized 503, with no retry, refresh, or fallback delete route.
+   */
+  @Test
+  public void ambiguousTypedDeleteIsOneUnknownAttemptWithoutRetryOrRefresh() throws Exception {
+    String viewId = "ambiguous_delete_view";
+    createView(viewId);
+    try {
+      HouseTable captured = findViewRow(viewId);
+      HouseTablePrimaryKey key = viewKey(viewId);
+      String secret = "SECRET_DELETE_CAUSE_" + captured.getTableLocation();
+      Mockito.doThrow(
+              new HouseTableRepositoryStateUnknownException(secret, new RuntimeException(secret)))
+          .when(houseTableRepository)
+          .deleteViewById(key);
+      Mockito.clearInvocations(houseTableRepository, viewAuditHandler);
+
+      MvcResult result =
+          mvc.perform(
+                  MockMvcRequestBuilders.delete(VIEWS_PATH + "/" + viewId)
+                      .accept(MediaType.APPLICATION_JSON)
+                      .header("Authorization", "Bearer " + jwtAccessToken))
+              .andExpect(status().isServiceUnavailable())
+              .andExpect(jsonPath("$.cause").doesNotExist())
+              .andExpect(jsonPath("$.stacktrace").doesNotExist())
+              .andReturn();
+      org.junit.jupiter.api.Assertions.assertFalse(
+          result.getResponse().getContentAsString().contains(secret),
+          "The ambiguous cause must not reach the wire.");
+
+      Mockito.verify(houseTableRepository, Mockito.times(1)).findViewById(key);
+      Mockito.verify(houseTableRepository, Mockito.times(1)).deleteViewById(key);
+      Mockito.verify(houseTableRepository, Mockito.never()).findEntityById(ArgumentMatchers.any());
+      Mockito.verify(houseTableRepository, Mockito.never()).deleteById(ArgumentMatchers.any());
+      Mockito.verify(houseTableRepository, Mockito.never())
+          .deleteById(ArgumentMatchers.any(), ArgumentMatchers.anyBoolean());
+      Mockito.verify(houseTableRepository, Mockito.never()).saveView(ArgumentMatchers.any());
+
+      ViewAuditEvent event = singleViewAudit();
+      org.junit.jupiter.api.Assertions.assertEquals(
+          OperationStatus.UNKNOWN, event.getOperationStatus());
+      org.junit.jupiter.api.Assertions.assertEquals(captured.getTableUUID(), event.getViewUUID());
+      org.junit.jupiter.api.Assertions.assertEquals(
+          captured.getTableLocation(), event.getOldMetadataLocation());
+      org.junit.jupiter.api.Assertions.assertNull(event.getNewMetadataLocation());
+      org.junit.jupiter.api.Assertions.assertEquals(viewId, event.getViewName());
+    } finally {
+      Mockito.reset(houseTableRepository);
+      deleteViewIfPresent(viewId);
+    }
+  }
+
+  /**
+   * The contrasting stage: an outage while capturing the row precedes any mutation, so it is a
+   * known FAILED operation that never reaches DELETE, not an ambiguous one.
+   */
+  @Test
+  public void captureOutageBeforeDeleteIsFailedAndNeverDeletes() throws Exception {
+    String viewId = "capture_outage_view";
+    createView(viewId);
+    try {
+      HouseTable captured = findViewRow(viewId);
+      HouseTablePrimaryKey key = viewKey(viewId);
+      Mockito.doThrow(
+              new HouseTableRepositoryStateUnknownException(
+                  "lookup outage", new RuntimeException("503")))
+          .when(houseTableRepository)
+          .findViewById(key);
+      Mockito.clearInvocations(houseTableRepository, viewAuditHandler);
+
+      mvc.perform(
+              MockMvcRequestBuilders.delete(VIEWS_PATH + "/" + viewId)
+                  .accept(MediaType.APPLICATION_JSON)
+                  .header("Authorization", "Bearer " + jwtAccessToken))
+          .andExpect(status().isServiceUnavailable())
+          .andExpect(jsonPath("$.cause").doesNotExist());
+
+      Mockito.verify(houseTableRepository, Mockito.never()).deleteViewById(ArgumentMatchers.any());
+      ViewAuditEvent event = singleViewAudit();
+      org.junit.jupiter.api.Assertions.assertEquals(
+          OperationStatus.FAILED, event.getOperationStatus());
+      org.junit.jupiter.api.Assertions.assertNull(event.getOldMetadataLocation());
+      Mockito.reset(houseTableRepository);
+      org.junit.jupiter.api.Assertions.assertEquals(captured, findViewRow(viewId));
+    } finally {
+      Mockito.reset(houseTableRepository);
+      deleteViewIfPresent(viewId);
+    }
+  }
+
   @Test
   public void listContinuationSupportsChangingClientSizesWithoutSkipOrRepeat() throws Exception {
     createView("view_a");
@@ -550,6 +645,19 @@ public class ViewsServiceH2IntegrationTest {
                   .header("Authorization", "Bearer " + jwtAccessToken))
           .andExpect(status().isNoContent());
     }
+  }
+
+  private static HouseTablePrimaryKey viewKey(String viewId) {
+    return HouseTablePrimaryKey.builder()
+        .databaseId(ViewModelConstants.DATABASE_ID)
+        .tableId(viewId)
+        .build();
+  }
+
+  private ViewAuditEvent singleViewAudit() {
+    ArgumentCaptor<ViewAuditEvent> event = ArgumentCaptor.forClass(ViewAuditEvent.class);
+    Mockito.verify(viewAuditHandler, Mockito.times(1)).audit(event.capture());
+    return event.getValue();
   }
 
   private HouseTable findViewRow() {

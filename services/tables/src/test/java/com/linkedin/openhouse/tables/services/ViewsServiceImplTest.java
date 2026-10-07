@@ -792,8 +792,17 @@ public class ViewsServiceImplTest {
                     ViewModelConstants.createRequestWithoutBaseVersion(), ACTING_PRINCIPAL, true));
 
     assertEquals(ViewErrorCode.NAME_ALREADY_EXISTS_AS_TABLE, thrown.getErrorCode());
+    assertEquals(HttpStatus.CONFLICT, thrown.getHttpStatus());
     assertDatabaseAuthorization(Privileges.CREATE_TABLE);
     verify(admissionService, never()).admit(any());
+    // The captured occupant decides the distinct code before any commit is attempted.
+    verify(viewRepository, times(1))
+        .prepareWrite(ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID);
+    verify(viewRepository, never()).commitCreate(any(), any(), any());
+    verify(viewRepository, never()).commitReplace(any(), any(), any());
+    verify(viewOperationAuditEmitter, times(1))
+        .emitFailed(any(), org.mockito.ArgumentMatchers.eq(ACTING_PRINCIPAL), any());
+    verify(viewOperationAuditEmitter, never()).emitUnknown(any(), any(), any(), any(), any());
   }
 
   @Test
@@ -944,6 +953,17 @@ public class ViewsServiceImplTest {
             ViewModelConstants.createRequestWithoutBaseVersion(), absence, ACTING_PRINCIPAL);
     verify(viewRepository, never()).commitReplace(any(), any(), any());
     verify(viewRepository, never()).deleteById(any(), any());
+    // One capture and one attempt: a failed commit is neither refreshed nor retried.
+    verify(viewRepository, times(1))
+        .prepareWrite(ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID);
+    org.mockito.Mockito.verifyNoMoreInteractions(viewRepository);
+    verify(viewOperationAuditEmitter, times(1))
+        .emitFailed(
+            any(),
+            org.mockito.ArgumentMatchers.eq(ACTING_PRINCIPAL),
+            org.mockito.ArgumentMatchers.eq(ViewModelConstants.SOURCE_DIALECT));
+    verify(viewOperationAuditEmitter, never()).emitUnknown(any(), any(), any(), any(), any());
+    verify(viewOperationAuditEmitter, never()).emitSuccess(any(), any(), any(), any());
   }
 
   @ParameterizedTest
@@ -1088,6 +1108,8 @@ public class ViewsServiceImplTest {
 
   private static Stream<Arguments> writeFailureMappings() {
     return Stream.of(
+        // A create race after captured absence: the published engine conflict, never a guessed
+        // occupant type, so it is VIEW_ALREADY_EXISTS rather than NAME_ALREADY_EXISTS_AS_TABLE.
         Arguments.of(
             new AlreadyExistsException("View already exists: %s", "existing"),
             ViewErrorCode.VIEW_ALREADY_EXISTS,

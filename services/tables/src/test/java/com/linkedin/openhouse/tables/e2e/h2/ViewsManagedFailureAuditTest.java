@@ -480,6 +480,45 @@ public class ViewsManagedFailureAuditTest {
     AuditEventInspection.assertNoSensitiveProperties(viewEvent, SECRETS);
   }
 
+  /**
+   * Service boundary only: this context mocks the whole view repository, so the repository's
+   * translation of an ambiguous DELETE is stubbed here and proved by the real-adapter H2 test.
+   */
+  @Test
+  public void ambiguousDropHasOneUnknownOperationAuditWithCapturedOldPointerOnly()
+      throws Exception {
+    RuntimeException raw = new RuntimeException(SECRET_SQL + " " + SECRET_BASE);
+    when(opaHandler.checkAccessDecision(any(), any(DatabaseDto.class), any())).thenReturn(true);
+    when(viewRepository.prepareDelete(ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID))
+        .thenReturn(PreparedViewOperation.view(ViewsManagedAuthMatrixBase.viewRow()));
+    Mockito.doThrow(new CommitStateUnknownException(raw))
+        .when(viewRepository)
+        .deleteById(ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID);
+
+    try (Log4j2LogCapture logs = new Log4j2LogCapture()) {
+      MvcResult result =
+          expectNoCauseOrStacktrace(mvc.perform(withToken(deleteView())))
+              .andExpect(status().isServiceUnavailable())
+              .andReturn();
+
+      assertNoSensitive(result.getResponse().getContentAsString(), logs.renderedEvents());
+    }
+
+    verify(viewRepository, times(1))
+        .prepareDelete(ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID);
+    verify(viewRepository, times(1))
+        .deleteById(ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID);
+    Mockito.verifyNoMoreInteractions(viewRepository);
+    AuditEventInspection.assertNoSensitiveProperties(captureServiceAudit(), SECRETS);
+    ViewAuditEvent viewEvent = captureViewAudit();
+    assertEquals(OperationStatus.UNKNOWN, viewEvent.getOperationStatus());
+    assertEquals(CAPTURED_UUID, viewEvent.getViewUUID());
+    assertEquals(ViewModelConstants.METADATA_LOCATION, viewEvent.getOldMetadataLocation());
+    assertNull(viewEvent.getNewMetadataLocation(), "An unacknowledged drop has no new pointer.");
+    assertEquals(PRINCIPAL, viewEvent.getUser());
+    AuditEventInspection.assertNoSensitiveProperties(viewEvent, SECRETS);
+  }
+
   @Test
   public void queryPageTokenFailureRedactsTokenFromRequestAuditWireAndLogs() throws Exception {
     String token =

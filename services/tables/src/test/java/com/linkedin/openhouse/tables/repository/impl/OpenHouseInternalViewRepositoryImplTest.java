@@ -20,6 +20,8 @@ import com.linkedin.openhouse.internal.catalog.fileio.FileIOManager;
 import com.linkedin.openhouse.internal.catalog.model.HouseTable;
 import com.linkedin.openhouse.internal.catalog.model.HouseTablePrimaryKey;
 import com.linkedin.openhouse.internal.catalog.repository.HouseTableRepository;
+import com.linkedin.openhouse.internal.catalog.repository.exception.HouseTableCallerException;
+import com.linkedin.openhouse.internal.catalog.repository.exception.HouseTableRepositoryStateUnknownException;
 import com.linkedin.openhouse.internal.catalog.view.ViewCommitEngine;
 import com.linkedin.openhouse.internal.catalog.view.ViewMetadataCodec;
 import com.linkedin.openhouse.internal.catalog.view.model.ViewCommitIntent;
@@ -32,10 +34,15 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Stream;
+import org.apache.iceberg.exceptions.CommitStateUnknownException;
 import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.view.ViewMetadata;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.data.domain.Page;
@@ -88,7 +95,7 @@ public class OpenHouseInternalViewRepositoryImplTest {
 
     verify(houseTableRepository, times(1)).findViewById(any(HouseTablePrimaryKey.class));
     verify(houseTableRepository, never()).findEntityById(any(HouseTablePrimaryKey.class));
-    verify(engine, never()).loadView(any(), any());
+    Mockito.verifyNoInteractions(engine);
     verify(metadataCodec).read(inputFile);
     org.junit.jupiter.api.Assertions.assertEquals(ViewModelConstants.VIEW_ID, result.getViewId());
     org.junit.jupiter.api.Assertions.assertEquals(CAPTURED_POINTER, result.getMetadataLocation());
@@ -118,6 +125,7 @@ public class OpenHouseInternalViewRepositoryImplTest {
 
     verify(houseTableRepository, times(2)).findViewById(any(HouseTablePrimaryKey.class));
     verify(houseTableRepository, never()).findEntityById(any(HouseTablePrimaryKey.class));
+    Mockito.verifyNoInteractions(engine);
     org.junit.jupiter.api.Assertions.assertFalse(prepared.getViewBaseRow().isPresent());
   }
 
@@ -136,7 +144,8 @@ public class OpenHouseInternalViewRepositoryImplTest {
 
     verify(houseTableRepository, times(1)).findViewById(any(HouseTablePrimaryKey.class));
     verify(houseTableRepository, never()).findEntityById(any(HouseTablePrimaryKey.class));
-    verify(engine, never()).loadView(any(), any());
+    verify(houseTableRepository, never()).deleteViewById(any(HouseTablePrimaryKey.class));
+    Mockito.verifyNoInteractions(engine);
     assertSame(viewRow, prepared.getViewBaseRow().get());
     org.junit.jupiter.api.Assertions.assertEquals(
         CAPTURED_POINTER, prepared.getViewBaseRow().get().getTableLocation());
@@ -170,8 +179,7 @@ public class OpenHouseInternalViewRepositoryImplTest {
     verify(houseTableRepository)
         .findAllViewsByDatabaseId(eq(ViewModelConstants.DATABASE_ID), forwarded.capture());
     assertEquals(requested, forwarded.getValue());
-    verify(engine, never()).listViews(any(), any());
-    verify(engine, never()).loadView(any(), any());
+    Mockito.verifyNoInteractions(engine);
     assertEquals(1, results.getContent().size());
     assertEquals(ViewModelConstants.VIEW_ID, results.getContent().get(0).getViewId());
     assertEquals(ViewModelConstants.DATABASE_ID, results.getContent().get(0).getDatabaseId());
@@ -204,8 +212,7 @@ public class OpenHouseInternalViewRepositoryImplTest {
     assertTrue(empty.hasNext(), "An empty page is not proof of the end of the listing.");
     assertTrue(last.getContent().isEmpty());
     assertFalse(last.hasNext());
-    verify(engine, never()).listViews(any(), any());
-    verify(engine, never()).loadView(any(), any());
+    Mockito.verifyNoInteractions(engine);
   }
 
   @Test
@@ -262,7 +269,8 @@ public class OpenHouseInternalViewRepositoryImplTest {
         repository.commitReplace(ViewModelConstants.fullyPopulatedRequest(), prepared, "alice");
 
     ArgumentCaptor<ViewCommitIntent> intent = ArgumentCaptor.forClass(ViewCommitIntent.class);
-    verify(engine).commit(intent.capture());
+    verify(engine, times(1)).commit(intent.capture());
+    Mockito.verifyNoMoreInteractions(engine);
     verify(houseTableRepository, times(1)).findEntityById(any(HouseTablePrimaryKey.class));
     assertSame(captured, prepared.getViewBaseRow().get());
     assertSame(captured, intent.getValue().getBaseRow());
@@ -318,7 +326,8 @@ public class OpenHouseInternalViewRepositoryImplTest {
             allocatedUuid.capture(),
             eq("alice"),
             anyMap());
-    verify(engine).commit(intent.capture());
+    verify(engine, times(1)).commit(intent.capture());
+    Mockito.verifyNoMoreInteractions(engine);
     org.junit.jupiter.api.Assertions.assertEquals(Boolean.TRUE, intent.getValue().getIsCreate());
     org.junit.jupiter.api.Assertions.assertEquals("hdfs", intent.getValue().getStorageType());
     UUID.fromString(intent.getValue().getViewUuid());
@@ -342,31 +351,132 @@ public class OpenHouseInternalViewRepositoryImplTest {
     verify(houseTableRepository, never()).findViewById(any(HouseTablePrimaryKey.class));
   }
 
+  /** A drop is one typed HTS DELETE by name: no engine, metadata read, storage or refresh. */
+  @Test
+  public void deleteIsOneDirectTypedHtsDeleteWithoutEngineMetadataOrStorageWork() {
+    HouseTableRepository houseTableRepository = Mockito.mock(HouseTableRepository.class);
+    when(houseTableRepository.deleteViewById(viewKey())).thenReturn(true);
+    DeleteCollaborators collaborators = new DeleteCollaborators(houseTableRepository);
+
+    collaborators.repository.deleteById(ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID);
+
+    verify(houseTableRepository, times(1)).deleteViewById(viewKey());
+    Mockito.verifyNoMoreInteractions(houseTableRepository);
+    collaborators.assertNoEngineMetadataOrStorageWork();
+  }
+
   /**
-   * The engine's name-based drop returns false when, after the service's typed capture, the name
-   * became absent or now holds a table. That is the ordinary NO_SUCH_VIEW outcome, with one attempt
-   * and no refresh, not a server fault.
+   * After the service's typed capture the name became absent or now holds a table. That is the
+   * ordinary NO_SUCH_VIEW outcome from the one typed DELETE, with no refresh, not a server fault.
    */
   @Test
-  public void dropThatFindsNoViewAfterCaptureIsNoSuchViewWithOneAttemptAndNoRefresh() {
+  public void deleteThatFindsNoViewAfterCaptureIsNoSuchViewWithOneAttemptAndNoRefresh() {
     HouseTableRepository houseTableRepository = Mockito.mock(HouseTableRepository.class);
-    ViewCommitEngine engine = Mockito.mock(ViewCommitEngine.class);
-    when(engine.dropView(ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID))
-        .thenReturn(false);
-    OpenHouseInternalViewRepositoryImpl repository =
-        newRepository(houseTableRepository, engine, Mockito.mock(StorageSelector.class));
+    when(houseTableRepository.deleteViewById(viewKey())).thenReturn(false);
+    DeleteCollaborators collaborators = new DeleteCollaborators(houseTableRepository);
 
     com.linkedin.openhouse.tables.exception.ViewApiException thrown =
         org.junit.jupiter.api.Assertions.assertThrows(
             com.linkedin.openhouse.tables.exception.ViewApiException.class,
             () ->
-                repository.deleteById(ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID));
+                collaborators.repository.deleteById(
+                    ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID));
 
     assertEquals(
         com.linkedin.openhouse.tables.exception.ViewErrorCode.NO_SUCH_VIEW, thrown.getErrorCode());
     assertEquals(org.springframework.http.HttpStatus.NOT_FOUND, thrown.getHttpStatus());
-    verify(engine, times(1)).dropView(ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID);
-    Mockito.verifyNoInteractions(houseTableRepository);
+    org.junit.jupiter.api.Assertions.assertNull(
+        thrown.getCause(), "An absent view is an ordinary outcome, not a wrapped failure.");
+    verify(houseTableRepository, times(1)).deleteViewById(viewKey());
+    Mockito.verifyNoMoreInteractions(houseTableRepository);
+    collaborators.assertNoEngineMetadataOrStorageWork();
+  }
+
+  /** An unacknowledged DELETE may have landed: unknown state carrying the identical cause. */
+  @Test
+  public void ambiguousDeleteIsCommitStateUnknownWithTheIdenticalCauseAndOneAttempt() {
+    HouseTableRepositoryStateUnknownException ambiguous =
+        new HouseTableRepositoryStateUnknownException(
+            "Cannot determine if HTS has persisted the delete", new RuntimeException("504"));
+    HouseTableRepository houseTableRepository = Mockito.mock(HouseTableRepository.class);
+    when(houseTableRepository.deleteViewById(viewKey())).thenThrow(ambiguous);
+    DeleteCollaborators collaborators = new DeleteCollaborators(houseTableRepository);
+
+    CommitStateUnknownException thrown =
+        org.junit.jupiter.api.Assertions.assertThrows(
+            CommitStateUnknownException.class,
+            () ->
+                collaborators.repository.deleteById(
+                    ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID));
+
+    assertSame(ambiguous, thrown.getCause());
+    verify(houseTableRepository, times(1)).deleteViewById(viewKey());
+    Mockito.verifyNoMoreInteractions(houseTableRepository);
+    collaborators.assertNoEngineMetadataOrStorageWork();
+  }
+
+  /**
+   * Only repository-state-unknown from the DELETE becomes unknown state: a caller fault or an
+   * unexpected failure is the same instance, unwrapped, after the one attempt.
+   */
+  @ParameterizedTest
+  @MethodSource("nonAmbiguousDeleteFailures")
+  public void nonAmbiguousDeleteFailuresPropagateUnchangedAfterOneAttempt(
+      RuntimeException failure) {
+    HouseTableRepository houseTableRepository = Mockito.mock(HouseTableRepository.class);
+    when(houseTableRepository.deleteViewById(viewKey())).thenThrow(failure);
+    DeleteCollaborators collaborators = new DeleteCollaborators(houseTableRepository);
+
+    RuntimeException thrown =
+        org.junit.jupiter.api.Assertions.assertThrows(
+            RuntimeException.class,
+            () ->
+                collaborators.repository.deleteById(
+                    ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID));
+
+    assertSame(failure, thrown);
+    verify(houseTableRepository, times(1)).deleteViewById(viewKey());
+    Mockito.verifyNoMoreInteractions(houseTableRepository);
+    collaborators.assertNoEngineMetadataOrStorageWork();
+  }
+
+  private static Stream<Arguments> nonAmbiguousDeleteFailures() {
+    return Stream.of(
+        Arguments.of(
+            new HouseTableCallerException(
+                "[Client side failure]Error status code for HTS:400", new RuntimeException("400"))),
+        Arguments.of(new IllegalStateException("unexpected delete failure")));
+  }
+
+  private static HouseTablePrimaryKey viewKey() {
+    return HouseTablePrimaryKey.builder()
+        .databaseId(ViewModelConstants.DATABASE_ID)
+        .tableId(ViewModelConstants.VIEW_ID)
+        .build();
+  }
+
+  /** The real bridge over mocks that a drop must never reach. */
+  private static final class DeleteCollaborators {
+    private final ViewCommitEngine engine = Mockito.mock(ViewCommitEngine.class);
+    private final FileIOManager fileIOManager = Mockito.mock(FileIOManager.class);
+    private final ViewMetadataCodec metadataCodec = Mockito.mock(ViewMetadataCodec.class);
+    private final StorageSelector storageSelector = Mockito.mock(StorageSelector.class);
+    private final OpenHouseInternalViewRepositoryImpl repository;
+
+    private DeleteCollaborators(HouseTableRepository houseTableRepository) {
+      repository =
+          newRepository(
+              houseTableRepository,
+              engine,
+              fileIOManager,
+              metadataCodec,
+              new StorageType(),
+              storageSelector);
+    }
+
+    private void assertNoEngineMetadataOrStorageWork() {
+      Mockito.verifyNoInteractions(engine, fileIOManager, metadataCodec, storageSelector);
+    }
   }
 
   private static ViewCommitResult committedResult() {
