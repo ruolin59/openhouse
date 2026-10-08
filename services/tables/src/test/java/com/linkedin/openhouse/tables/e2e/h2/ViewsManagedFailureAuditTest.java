@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -13,7 +14,9 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.google.gson.JsonObject;
 import com.linkedin.openhouse.common.audit.AuditHandler;
+import com.linkedin.openhouse.common.audit.ServiceAuditUriRedactor;
 import com.linkedin.openhouse.common.audit.model.ServiceAuditEvent;
 import com.linkedin.openhouse.common.metrics.MetricsConstant;
 import com.linkedin.openhouse.common.security.DummyTokenInterceptor;
@@ -22,6 +25,8 @@ import com.linkedin.openhouse.internal.catalog.repository.exception.HouseTableRe
 import com.linkedin.openhouse.tables.audit.model.OperationStatus;
 import com.linkedin.openhouse.tables.audit.model.ViewAuditEvent;
 import com.linkedin.openhouse.tables.authorization.OpaHandler;
+import com.linkedin.openhouse.tables.controller.DatabasesController;
+import com.linkedin.openhouse.tables.controller.ViewsController;
 import com.linkedin.openhouse.tables.exception.ViewApiException;
 import com.linkedin.openhouse.tables.exception.ViewExceptionHandler;
 import com.linkedin.openhouse.tables.mock.audit.AuditEventInspection;
@@ -41,6 +46,8 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Metrics;
 import java.lang.reflect.Method;
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
@@ -48,6 +55,9 @@ import java.util.Set;
 import org.apache.iceberg.exceptions.CommitStateUnknownException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -69,8 +79,10 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.method.annotation.ExceptionHandlerMethodResolver;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.util.NestedServletException;
 
 @SpringBootTest(classes = {SpringH2Application.class, ViewsManagedFailureAuditTest.Config.class})
@@ -650,6 +662,272 @@ public class ViewsManagedFailureAuditTest {
     AuditEventInspection.assertNoSensitiveProperties(event, SECRETS);
     assertTrue(String.valueOf(event.getUri()).contains("sortBy=viewId"), event.getUri());
     verify(viewAuditHandler, never()).audit(any(ViewAuditEvent.class));
+  }
+
+  // --- MVC route aliases: audit scope must follow the route MVC actually resolved ---
+
+  private static final String REDACTED = ServiceAuditUriRedactor.REDACTED_VALUE;
+  private static final String DECLARED_COLLECTION = "/v1/databases/{databaseId}/views";
+  private static final String DECLARED_ITEM = DECLARED_COLLECTION + "/{viewId}";
+  private static final String TRAILING_SLASH = "/";
+  private static final String MATRIX = ";variant=x";
+
+  /**
+   * Spring MVC also serves the list route with a trailing slash or matrix content. Both aliases
+   * bind the continuation (literal or percent-encoded name) to the real backend page, and the
+   * emitted request audit keeps the alias path and safe fields but never the token.
+   */
+  @ParameterizedTest
+  @CsvSource({"/,pageToken", "/,%70ageToken", ";variant=x,pageToken", ";variant=x,%70ageToken"})
+  public void listAliasesBindTheContinuationAndMaskItInTheEmittedAudit(
+      String alias, String tokenName) throws Exception {
+    String token = pageToken(3);
+    when(viewRepository.searchViews(any(), any()))
+        .thenAnswer(
+            invocation ->
+                new PageImpl<ViewDto>(
+                    Collections.emptyList(), invocation.<Pageable>getArgument(1), 0));
+    String path = VIEWS_PATH + alias;
+    String query = tokenName + "=" + token + "&sortBy=viewId&size=1";
+
+    MvcResult result;
+    try (Log4j2LogCapture logs = new Log4j2LogCapture()) {
+      result =
+          mvc.perform(
+                  MockMvcRequestBuilders.get(URI.create(path + "?" + query))
+                      .accept(MediaType.APPLICATION_JSON)
+                      .header("Authorization", "Bearer " + jwtAccessToken))
+              .andExpect(status().isOk())
+              .andReturn();
+
+      assertFalse(result.getResponse().getContentAsString().contains(token));
+      assertFalse(logs.renderedEvents().contains(token), logs.renderedEvents());
+    }
+    assertResolvedTo(result, ViewsController.class, "getAllViews", DECLARED_COLLECTION);
+    ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+    verify(viewRepository).searchViews(eq(ViewModelConstants.DATABASE_ID), pageable.capture());
+    assertEquals(3, pageable.getValue().getPageNumber(), "The alias must bind the continuation.");
+
+    String uri = captureServiceAudit().getUri();
+    assertEquals(path + "?" + tokenName + "=" + REDACTED + "&sortBy=viewId&size=1", uri);
+    assertNoToken(uri, token);
+    verify(viewAuditHandler, never()).audit(any(ViewAuditEvent.class));
+  }
+
+  /**
+   * A malformed, duplicated literal-and-encoded continuation on either alias is rejected by the
+   * view advice before the backend, and every token value is masked in the emitted audit.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {TRAILING_SLASH, MATRIX})
+  public void listAliasesMaskEveryRejectedTokenInTheEmittedAudit(String alias) throws Exception {
+    String literal = SECRET_PAGE_TOKEN + "-literal";
+    String encoded = SECRET_PAGE_TOKEN + "-encoded";
+    String path = VIEWS_PATH + alias;
+
+    MvcResult result;
+    try (Log4j2LogCapture logs = new Log4j2LogCapture()) {
+      result =
+          expectNoCauseOrStacktrace(
+                  mvc.perform(
+                      MockMvcRequestBuilders.get(
+                              URI.create(
+                                  path
+                                      + "?pageToken="
+                                      + literal
+                                      + "&sortBy=viewId&%70ageToken="
+                                      + encoded))
+                          .accept(MediaType.APPLICATION_JSON)
+                          .header("Authorization", "Bearer " + jwtAccessToken)))
+              .andExpect(status().isBadRequest())
+              .andReturn();
+
+      assertNoSensitive(result.getResponse().getContentAsString(), logs.renderedEvents());
+    }
+    assertResolvedTo(result, ViewsController.class, "getAllViews", DECLARED_COLLECTION);
+    verify(viewRepository, never()).searchViews(any(), any());
+    String uri = captureServiceAudit().getUri();
+    assertEquals(path + "?pageToken=" + REDACTED + "&sortBy=viewId&%70ageToken=" + REDACTED, uri);
+    verify(viewAuditHandler, never()).audit(any(ViewAuditEvent.class));
+  }
+
+  /**
+   * A size that fails binding is rejected by exception advice before the controller body runs; the
+   * alias's audit scope must survive that path too.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {TRAILING_SLASH, MATRIX})
+  public void listAliasBindingFailureStillMasksTheTokenInTheEmittedAudit(String alias)
+      throws Exception {
+    String token = pageToken(3);
+    String path = VIEWS_PATH + alias;
+
+    MvcResult result =
+        expectNoCauseOrStacktrace(
+                mvc.perform(
+                    MockMvcRequestBuilders.get(
+                            URI.create(path + "?pageToken=" + token + "&size=abc&sortBy=viewId"))
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + jwtAccessToken)))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.message").value(SIZE_BINDING_MESSAGE))
+            .andReturn();
+
+    assertResolvedTo(result, ViewsController.class, "getAllViews", DECLARED_COLLECTION);
+    verify(viewRepository, never()).searchViews(any(), any());
+    String uri = captureServiceAudit().getUri();
+    assertEquals(path + "?pageToken=" + REDACTED + "&size=abc&sortBy=viewId", uri);
+    assertNoToken(uri, token);
+    verify(viewAuditHandler, never()).audit(any(ViewAuditEvent.class));
+  }
+
+  /** A create through either collection alias commits once and audits no view definition. */
+  @ParameterizedTest
+  @ValueSource(strings = {TRAILING_SLASH, MATRIX})
+  public void createThroughACollectionAliasMasksTheDefinitionInTheEmittedAudit(String alias)
+      throws Exception {
+    when(opaHandler.checkAccessDecision(any(), any(DatabaseDto.class), any())).thenReturn(true);
+    when(viewRepository.commitCreate(any(), any(), any()))
+        .thenReturn(ViewsManagedAuthMatrixBase.createdOutcome());
+
+    MvcResult result =
+        mvc.perform(
+                MockMvcRequestBuilders.post(URI.create(VIEWS_PATH + alias))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(requestWithSensitiveMarkers())
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + jwtAccessToken))
+            .andExpect(status().isCreated())
+            .andReturn();
+
+    assertResolvedTo(result, ViewsController.class, "createView", DECLARED_COLLECTION);
+    verify(viewRepository, times(1)).commitCreate(any(), any(), any());
+    ServiceAuditEvent event = captureServiceAudit();
+    assertEquals(VIEWS_PATH + alias, event.getUri());
+    assertDefinitionMasked(event, false);
+    AuditEventInspection.assertNoSensitiveProperties(event, SECRETS);
+    assertEquals(OperationStatus.SUCCESS, captureViewAudit().getOperationStatus());
+  }
+
+  /** A replace through either item alias commits once and audits no definition or CAS token. */
+  @ParameterizedTest
+  @ValueSource(strings = {TRAILING_SLASH, MATRIX})
+  public void replaceThroughAnItemAliasMasksTheDefinitionAndTokenInTheEmittedAudit(String alias)
+      throws Exception {
+    when(opaHandler.checkAccessDecision(any(), any(DatabaseDto.class), any())).thenReturn(true);
+    when(viewRepository.prepareWrite(ViewModelConstants.DATABASE_ID, ViewModelConstants.VIEW_ID))
+        .thenReturn(PreparedViewOperation.view(ViewsManagedAuthMatrixBase.viewRow()));
+    when(viewRepository.commitReplace(any(), any(), any()))
+        .thenReturn(ViewsManagedAuthMatrixBase.replacedOutcome());
+    String body =
+        ViewModelConstants.fullyPopulatedRequest()
+            .toBuilder()
+            .schema(validSensitiveSchema())
+            .representations(
+                Collections.singletonList(
+                    com.linkedin.openhouse.tables.api.spec.v0.request.components.ViewRepresentation
+                        .builder()
+                        .type("sql")
+                        .dialect("spark")
+                        .sql(SECRET_SQL)
+                        .build()))
+            .build()
+            .toJson();
+
+    MvcResult result =
+        mvc.perform(
+                MockMvcRequestBuilders.put(URI.create(VIEW_PATH + alias))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + jwtAccessToken))
+            .andExpect(status().isOk())
+            .andReturn();
+
+    assertResolvedTo(result, ViewsController.class, "updateView", DECLARED_ITEM);
+    verify(viewRepository, times(1)).commitReplace(any(), any(), any());
+    ServiceAuditEvent event = captureServiceAudit();
+    assertEquals(VIEW_PATH + alias, event.getUri());
+    assertDefinitionMasked(event, true);
+    AuditEventInspection.assertNoSensitiveProperties(
+        event, SECRET_SQL, SECRET_SCHEMA, ViewModelConstants.METADATA_LOCATION);
+    assertEquals(OperationStatus.SUCCESS, captureViewAudit().getOperationStatus());
+  }
+
+  /** A non-view route's audited URI is exactly what was sent, query values included. */
+  @Test
+  public void nonViewRouteAuditKeepsItsUriExactly() throws Exception {
+    String uri = "/v1/databases?pageToken=non-view-token&size=2&sortBy=databaseId";
+
+    MvcResult result =
+        mvc.perform(
+                MockMvcRequestBuilders.get(URI.create(uri))
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + jwtAccessToken))
+            .andExpect(status().isOk())
+            .andReturn();
+
+    HandlerMethod handler = (HandlerMethod) result.getHandler();
+    assertEquals(DatabasesController.class, handler.getBeanType());
+    assertEquals("getAllDatabases", handler.getMethod().getName());
+    assertEquals(uri, captureServiceAudit().getUri());
+    verify(viewAuditHandler, never()).audit(any(ViewAuditEvent.class));
+  }
+
+  private static String pageToken(int sourcePage) {
+    return new ViewPageTokenCodec()
+        .encode(
+            new ViewPageCursor(
+                ViewModelConstants.DATABASE_ID,
+                "viewId",
+                ViewPaginationAdapter.DEFAULT_SOURCE_PAGE_SIZE,
+                sourcePage,
+                0));
+  }
+
+  /**
+   * The real handler MVC chose, and the pattern it recorded: the declared one, or (Ant trailing
+   * slash matching) the declared one plus a slash. The observed value is printed as evidence.
+   */
+  private static void assertResolvedTo(
+      MvcResult result, Class<?> controller, String method, String declaredPattern) {
+    HandlerMethod handler = (HandlerMethod) result.getHandler();
+    assertEquals(controller, handler.getBeanType());
+    assertEquals(method, handler.getMethod().getName());
+    Object pattern =
+        result.getRequest().getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+    System.out.println(
+        "OBSERVED_BEST_MATCHING_PATTERN uri="
+            + result.getRequest().getRequestURI()
+            + " pattern="
+            + pattern);
+    assertTrue(
+        declaredPattern.equals(pattern) || (declaredPattern + "/").equals(pattern),
+        "unexpected matched pattern: " + pattern);
+  }
+
+  private static void assertNoToken(String audited, String token) throws Exception {
+    assertFalse(audited.contains(token), audited);
+    assertFalse(audited.contains(URLEncoder.encode(token, StandardCharsets.UTF_8.name())), audited);
+  }
+
+  private static void assertDefinitionMasked(ServiceAuditEvent event, boolean expectCasToken) {
+    JsonObject payload = event.getRequestPayload().getAsJsonObject();
+    assertEquals(REDACTED, payload.get("schema").getAsString());
+    assertEquals(
+        REDACTED,
+        payload
+            .getAsJsonArray("representations")
+            .get(0)
+            .getAsJsonObject()
+            .get("sql")
+            .getAsString());
+    if (expectCasToken) {
+      assertEquals(REDACTED, payload.get("baseMetadataLocation").getAsString());
+    }
+    assertEquals(ViewModelConstants.DATABASE_ID, payload.get("databaseId").getAsString());
+    assertEquals(ViewModelConstants.VIEW_ID, payload.get("viewId").getAsString());
+    assertEquals(ViewModelConstants.SOURCE_DIALECT, payload.get("sourceDialect").getAsString());
   }
 
   /**

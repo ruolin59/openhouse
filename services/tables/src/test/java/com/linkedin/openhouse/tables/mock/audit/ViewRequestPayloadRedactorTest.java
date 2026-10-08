@@ -11,8 +11,10 @@ import com.linkedin.openhouse.tables.audit.ViewRequestPayloadRedactor;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.servlet.HandlerMapping;
 
 /**
  * Unit coverage of {@link ViewRequestPayloadRedactor}. The controller-level proof that the redactor
@@ -221,5 +223,64 @@ public class ViewRequestPayloadRedactorTest {
     String rendered = redacted.toString();
     Assertions.assertFalse(rendered.contains("SQL_ARRAY_SECRET"), rendered);
     Assertions.assertFalse(rendered.contains("SCHEMA_SECRET"), rendered);
+  }
+
+  // --- Scope: follows the route MVC resolved, else the normalized application lookup path ---
+
+  private static final String COLLECTION_TEMPLATE = "/v1/databases/{databaseId}/views";
+  private static final String ITEM_TEMPLATE = COLLECTION_TEMPLATE + "/{viewId}";
+
+  private static MockHttpServletRequest request(String contextPath, String uri, String pattern) {
+    MockHttpServletRequest request = new MockHttpServletRequest("POST", uri);
+    request.setContextPath(contextPath);
+    if (pattern != null) {
+      request.setAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE, pattern);
+    }
+    return request;
+  }
+
+  /** The resolved collection or item template, with or without MVC's slash, over an alias. */
+  @ParameterizedTest
+  @CsvSource({
+    "/v1/databases/db/views/," + COLLECTION_TEMPLATE,
+    "/v1/databases/db/views/," + COLLECTION_TEMPLATE + "/",
+    "/v1/databases/db/views;variant=x," + COLLECTION_TEMPLATE,
+    "/v1/databases/db/views/v/," + ITEM_TEMPLATE,
+    "/v1/databases/db/views/v/," + ITEM_TEMPLATE + "/",
+    "/v1/databases/db/views/v;variant=x," + ITEM_TEMPLATE
+  })
+  public void appliesToTheResolvedViewRoutesWhateverAliasWasSent(String uri, String pattern) {
+    Assertions.assertTrue(redactor.appliesTo(request("", uri, pattern)), uri + " -> " + pattern);
+  }
+
+  /** A resolved non-view route is authoritative, even over a view-looking raw path. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "/v1/databases/{databaseId}/tables",
+        "/v1/databases/{databaseId}/tables/{tableId}",
+        "/v2/databases/{databaseId}/views"
+      })
+  public void aResolvedNonViewRouteIsAuthoritative(String pattern) {
+    Assertions.assertFalse(
+        redactor.appliesTo(request("", "/v1/databases/db/views/v", pattern)), pattern);
+  }
+
+  /** With no resolved route, the decoded application lookup path decides. */
+  @ParameterizedTest
+  @CsvSource({
+    "'',/v1/databases/db/views/",
+    "'',/v1/databases/db/views;variant=x",
+    "'',/v1/databases/db/views/v/",
+    "'',/v1/databases/db/views/v;variant=x",
+    "/ctx,/ctx/v1/databases/db/views/v"
+  })
+  public void withoutAResolvedRouteTheNormalizedLookupPathDecides(String contextPath, String uri) {
+    Assertions.assertTrue(redactor.appliesTo(request(contextPath, uri, null)), uri);
+  }
+
+  @Test
+  public void aRequestWithoutAUriIsDeclined() {
+    Assertions.assertFalse(redactor.appliesTo(new MockHttpServletRequest()));
   }
 }
