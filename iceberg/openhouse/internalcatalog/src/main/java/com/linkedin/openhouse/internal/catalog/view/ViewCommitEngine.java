@@ -13,7 +13,8 @@ public interface ViewCommitEngine {
    * Commits against the supplied snapshot without reloading HTS. CREATE requires absence; REPLACE
    * requires a view. No-op REPLACE returns the captured snapshot without publishing. The source
    * dialect is required on CREATE and immutable on REPLACE: it must exactly (case-sensitively)
-   * match the current version's source dialect in the captured snapshot.
+   * match the current version's source dialect in the captured snapshot; a mismatch is rejected
+   * with {@link ViewSourceDialectMismatchException}, a {@code BadRequestException}.
    */
   ViewCommitResult commit(ViewCommitIntent intent);
 }

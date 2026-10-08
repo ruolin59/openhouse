@@ -1,5 +1,6 @@
 package com.linkedin.openhouse.tables.e2e.h2;
 
+import static com.linkedin.openhouse.common.audit.ServiceAuditPayloadRedactor.REDACTED_VALUE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -15,6 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import com.linkedin.openhouse.common.audit.AuditHandler;
 import com.linkedin.openhouse.common.audit.ServiceAuditUriRedactor;
 import com.linkedin.openhouse.common.audit.model.ServiceAuditEvent;
@@ -177,6 +179,37 @@ public class ViewsManagedFailureAuditTest {
     }
     AuditEventInspection.assertNoSensitiveProperties(captureServiceAudit(), SECRETS);
     verify(viewAuditHandler, never()).audit(any(ViewAuditEvent.class));
+  }
+
+  @Test
+  public void invalidRootPrimitiveAndArrayBodiesAreRedactedFromRequestAudit() throws Exception {
+    for (String body :
+        new String[] {
+          "\"" + SECRET_SQL + " " + SECRET_SCHEMA + " " + SECRET_BASE + "\"",
+          "[\"" + SECRET_SQL + "\",\"" + SECRET_SCHEMA + "\",\"" + SECRET_BASE + "\"]"
+        }) {
+      Mockito.reset(serviceAuditHandler);
+      try (Log4j2LogCapture logs = new Log4j2LogCapture()) {
+        MvcResult result =
+            expectNoCauseOrStacktrace(
+                    mvc.perform(
+                        MockMvcRequestBuilders.post(VIEWS_PATH)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body)
+                            .accept(MediaType.APPLICATION_JSON)
+                            .header("Authorization", "Bearer " + jwtAccessToken)))
+                .andExpect(status().isBadRequest())
+                .andReturn();
+
+        assertNoSensitive(result.getResponse().getContentAsString(), logs.renderedEvents());
+      }
+
+      ServiceAuditEvent event = captureServiceAudit();
+      assertEquals(new JsonPrimitive(REDACTED_VALUE), event.getRequestPayload());
+      AuditEventInspection.assertNoSensitiveProperties(event, SECRETS);
+    }
+    verify(viewAuditHandler, never()).audit(any(ViewAuditEvent.class));
+    Mockito.verifyNoInteractions(viewRepository, opaHandler);
   }
 
   @Test

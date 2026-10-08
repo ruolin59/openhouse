@@ -123,12 +123,16 @@ public class ViewRequestPayloadRedactorTest {
    * reaches the redactor, because the aspect audits whatever the caller sent.
    */
   @Test
-  public void toleratesPayloadsThatCarryNoViewDefinition() {
+  public void preservesNullAndRedactsNonObjectRootPayloads() {
     Assertions.assertNull(redactor.redact(null));
     Assertions.assertEquals(JsonNull.INSTANCE, redactor.redact(JsonNull.INSTANCE));
     Assertions.assertEquals(
-        new JsonPrimitive("not an object"), redactor.redact(new JsonPrimitive("not an object")));
-    Assertions.assertEquals(new JsonArray(), redactor.redact(new JsonArray()));
+        new JsonPrimitive(ServiceAuditPayloadRedactor.REDACTED_VALUE),
+        redactor.redact(new JsonPrimitive("SELECT SQL_SECRET")));
+    Assertions.assertEquals(
+        new JsonPrimitive(ServiceAuditPayloadRedactor.REDACTED_VALUE),
+        redactor.redact(
+            JsonParser.parseString("[\"SQL_SECRET\", {\"schema\":\"SCHEMA_SECRET\"}]")));
 
     JsonObject withoutDefinition = new JsonObject();
     withoutDefinition.addProperty("viewId", "my_view");

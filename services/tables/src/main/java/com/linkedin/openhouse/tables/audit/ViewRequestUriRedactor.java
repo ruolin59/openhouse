@@ -9,6 +9,8 @@ import java.util.List;
 import javax.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.util.AntPathMatcher;
+import org.springframework.web.servlet.HandlerMapping;
+import org.springframework.web.util.UrlPathHelper;
 
 /**
  * Keeps the view listing {@code pageToken} out of service audit events.
@@ -40,10 +42,24 @@ public class ViewRequestUriRedactor implements ServiceAuditUriRedactor {
 
   private static final String PAGE_TOKEN_PARAM_NAME = "pageToken";
 
+  /**
+   * Scope follows the route Spring MVC resolved for the request, so any alias MVC routes to the
+   * list handler (a trailing slash or a matrix variable) is covered. A resolved non-view route is
+   * authoritative. Only when no route was resolved does the decoded application lookup path decide.
+   * The audited URI itself is never rewritten.
+   */
   @Override
   public boolean appliesTo(HttpServletRequest request) {
-    String uri = request.getRequestURI();
-    return uri != null && PATH_MATCHER.match(VIEW_COLLECTION_PATTERN, uri);
+    if (request.getRequestURI() == null) {
+      return false;
+    }
+    Object resolved = request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+    String path =
+        resolved instanceof String
+            ? (String) resolved
+            : UrlPathHelper.defaultInstance.getLookupPathForRequest(request);
+    return PATH_MATCHER.match(VIEW_COLLECTION_PATTERN, path)
+        || PATH_MATCHER.match(VIEW_COLLECTION_PATTERN + "/", path);
   }
 
   @Override

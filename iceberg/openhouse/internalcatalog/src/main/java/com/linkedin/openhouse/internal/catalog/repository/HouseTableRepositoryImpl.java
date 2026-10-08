@@ -282,6 +282,15 @@ public class HouseTableRepositoryImpl implements HouseTableRepository {
             context ->
                 apiInstance
                     .getUserTables(new HashMap<>())
+                    // Only an HTTP 5xx is classified here, before row mapping; 4xx and other
+                    // failures keep their existing behavior.
+                    .onErrorResume(
+                        e ->
+                            e instanceof WebClientResponseException
+                                && ((WebClientResponseException) e)
+                                    .getStatusCode()
+                                    .is5xxServerError(),
+                        this::handleHtsHttpError)
                     .map(GetAllEntityResponseBodyUserTable::getResults)
                     .flatMapMany(Flux::fromIterable)
                     .map(houseTableMapper::toHouseTableWithDatabaseId)

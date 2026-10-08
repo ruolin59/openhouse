@@ -8,6 +8,8 @@ import com.linkedin.openhouse.common.audit.ServiceAuditPayloadRedactor;
 import javax.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.util.AntPathMatcher;
+import org.springframework.web.servlet.HandlerMapping;
+import org.springframework.web.util.UrlPathHelper;
 
 /**
  * Keeps view definitions and the write CAS token out of service audit events.
@@ -19,10 +21,13 @@ import org.springframework.util.AntPathMatcher;
  * baseMetadataLocation} with {@link #REDACTED_VALUE} before the event is built. The keys are kept,
  * so an auditor still sees that the fields were sent.
  *
- * <p>Scoped by request URI rather than by field name on purpose. {@code
- * CreateUpdateTableRequestBody} also carries a {@code schema}, and redacting by name alone would
- * silently change table, database and snapshot audit payloads. Matching the view routes leaves
- * every other route's payload exactly as it was.
+ * <p>Scoped by route rather than by field name on purpose. {@code CreateUpdateTableRequestBody}
+ * also carries a {@code schema}, and redacting by name alone would silently change table, database
+ * and snapshot audit payloads. Matching the view routes leaves every other route's payload exactly
+ * as it was. The scope follows the route Spring MVC resolved for the request (so a trailing slash
+ * or matrix-variable alias is covered), or the decoded application lookup path when no route was
+ * resolved. A non-null, non-object root payload on a view route is replaced in full because its
+ * fields cannot be safely classified; JSON null and an absent body are left unchanged.
  *
  * <p>Every field that is not part of the view definition or CAS token — {@code viewId}, {@code
  * databaseId}, {@code sourceDialect}, {@code defaultCatalog}, {@code defaultNamespace}, and {@code
@@ -47,18 +52,30 @@ public class ViewRequestPayloadRedactor implements ServiceAuditPayloadRedactor {
 
   @Override
   public boolean appliesTo(HttpServletRequest request) {
-    String uri = request.getRequestURI();
-    return uri != null
-        && (PATH_MATCHER.match(VIEW_COLLECTION_PATTERN, uri)
-            || PATH_MATCHER.match(VIEW_ITEM_PATTERN, uri));
+    if (request.getRequestURI() == null) {
+      return false;
+    }
+    Object resolved = request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+    String path =
+        resolved instanceof String
+            ? (String) resolved
+            : UrlPathHelper.defaultInstance.getLookupPathForRequest(request);
+    return matchesWithOptionalSlash(VIEW_COLLECTION_PATTERN, path)
+        || matchesWithOptionalSlash(VIEW_ITEM_PATTERN, path);
+  }
+
+  private static boolean matchesWithOptionalSlash(String pattern, String path) {
+    return PATH_MATCHER.match(pattern, path) || PATH_MATCHER.match(pattern + "/", path);
   }
 
   @Override
   public JsonElement redact(JsonElement requestPayload) {
-    if (requestPayload == null || !requestPayload.isJsonObject()) {
-      // A bodyless request parses to JsonNull, and a malformed body can be any other element.
-      // Neither carries a view definition, so there is nothing to remove.
+    if (requestPayload == null || requestPayload.isJsonNull()) {
       return requestPayload;
+    }
+    if (!requestPayload.isJsonObject()) {
+      // An invalid root-level primitive or array has no known-safe fields to preserve.
+      return new JsonPrimitive(REDACTED_VALUE);
     }
     JsonObject redacted = requestPayload.deepCopy().getAsJsonObject();
     if (redacted.has(SCHEMA_FIELD)) {

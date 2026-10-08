@@ -4,6 +4,7 @@ import com.linkedin.openhouse.cluster.configs.ClusterProperties;
 import com.linkedin.openhouse.common.api.validator.ValidatorConstants;
 import com.linkedin.openhouse.internal.catalog.repository.exception.HouseTableNotFoundException;
 import com.linkedin.openhouse.internal.catalog.repository.exception.HouseTableRepositoryStateUnknownException;
+import com.linkedin.openhouse.internal.catalog.view.ViewSourceDialectMismatchException;
 import com.linkedin.openhouse.tables.api.spec.v0.request.CreateUpdateViewRequestBody;
 import com.linkedin.openhouse.tables.audit.ViewOperationAuditEmitter;
 import com.linkedin.openhouse.tables.authorization.Privileges;
@@ -245,9 +246,15 @@ public class ViewsServiceImpl implements ViewsService {
       return new ViewApiException(
           ViewErrorCode.VIEW_SERVICE_UNAVAILABLE, "View service unavailable", e);
     }
-    // engine BadRequestException (trusted server input), HouseTableCallerException, corrupt-row
-    // IllegalStateException, and any other unexpected failure are server faults: caller-input 400s
-    // are owned entirely by the API validator before the service is reached.
+    if (e instanceof ViewSourceDialectMismatchException) {
+      // The one state-dependent client rejection: the captured current view's source dialect
+      // cannot be known to the API validator. Matched by type only, never by message.
+      return new ViewApiException(
+          ViewErrorCode.INVALID_VIEW_DEFINITION, "sourceDialect : must match the current view", e);
+    }
+    // any other engine BadRequestException (trusted server input), HouseTableCallerException,
+    // corrupt-row IllegalStateException, and any other unexpected failure are server faults:
+    // structural caller-input 400s are owned by the API validator before the service is reached.
     return new ViewApiException(
         ViewErrorCode.INTERNAL_VIEW_ERROR, "Unexpected view service failure", e);
   }
