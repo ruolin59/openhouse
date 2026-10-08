@@ -939,6 +939,13 @@ public class ViewCommitEngineCommitTest {
   private static final String SOURCE_MISMATCH_MESSAGE =
       "Cannot replace view " + DB + "." + VIEW + ": sourceDialect must match the current view";
 
+  /**
+   * By name, so these tests compile before the subtype exists. It must extend the legacy
+   * BadRequestException, so direct-engine callers that catch it keep working.
+   */
+  private static final String SOURCE_MISMATCH_EXCEPTION =
+      "com.linkedin.openhouse.internal.catalog.view.ViewSourceDialectMismatchException";
+
   private static final String CORRUPT_STORED_SOURCE_MESSAGE =
       "Corrupt view metadata " + DB + "." + VIEW + ": sourceDialect is missing or blank";
 
@@ -966,6 +973,10 @@ public class ViewCommitEngineCommitTest {
             BadRequestException.class, () -> harness.getViewCommitEngine().commit(intent));
 
     Assertions.assertEquals(SOURCE_MISMATCH_MESSAGE, thrown.getMessage(), caseName);
+    Assertions.assertEquals(
+        SOURCE_MISMATCH_EXCEPTION,
+        thrown.getClass().getName(),
+        "a source mismatch is the typed client rejection, not a generic bad request: " + caseName);
     assertRejectedReplaceOnlyReadTheCapturedFile(base, baseline);
   }
 
@@ -1414,16 +1425,19 @@ public class ViewCommitEngineCommitTest {
     Map<String, String> hostile = new HashMap<>();
     hostile.put(ViewProperties.REPLACE_DROP_DIALECT_ALLOWED, "true");
 
-    Assertions.assertThrows(
-        BadRequestException.class,
-        () ->
-            harness
-                .getViewCommitEngine()
-                .commit(
-                    ViewTestFixtures.baseIntent(root, Boolean.TRUE, null)
-                        .viewProperties(hostile)
-                        .build()));
+    BadRequestException thrown =
+        Assertions.assertThrows(
+            BadRequestException.class,
+            () ->
+                harness
+                    .getViewCommitEngine()
+                    .commit(
+                        ViewTestFixtures.baseIntent(root, Boolean.TRUE, null)
+                            .viewProperties(hostile)
+                            .build()));
 
+    // Only the source mismatch is the typed subtype; every other engine rejection stays generic.
+    Assertions.assertEquals(BadRequestException.class, thrown.getClass());
     Assertions.assertEquals(0, harness.getHouseTableRepository().getSaveViewCalls());
     Assertions.assertTrue(harness.metadataFiles().isEmpty());
   }
