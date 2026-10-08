@@ -11,6 +11,7 @@ import com.linkedin.openhouse.internal.catalog.fileio.FileIOManager;
 import com.linkedin.openhouse.internal.catalog.model.HouseTable;
 import com.linkedin.openhouse.internal.catalog.model.HouseTablePrimaryKey;
 import com.linkedin.openhouse.internal.catalog.repository.HouseTableRepository;
+import com.linkedin.openhouse.internal.catalog.repository.exception.HouseTableRepositoryStateUnknownException;
 import com.linkedin.openhouse.internal.catalog.view.ViewCommitEngine;
 import com.linkedin.openhouse.internal.catalog.view.ViewMetadataCodec;
 import com.linkedin.openhouse.internal.catalog.view.model.SqlViewRepresentationIntent;
@@ -33,8 +34,8 @@ import java.util.stream.Collectors;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.exceptions.CommitStateUnknownException;
 import org.apache.iceberg.io.FileIO;
-import org.apache.iceberg.view.ViewMetadata;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -196,13 +197,19 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
 
   @Override
   public void deleteById(String databaseId, String viewId) {
-    boolean dropped = viewCommitEngine.dropView(databaseId, viewId);
+    boolean dropped;
+    try {
+      dropped = houseTableRepository.deleteViewById(primaryKey(databaseId, viewId));
+    } catch (HouseTableRepositoryStateUnknownException e) {
+      // Only this single DELETE attempt may have landed unacknowledged; captures stay outside.
+      throw new CommitStateUnknownException(e);
+    }
     if (!dropped) {
       // A permitted concurrent writer dropped this view (or replaced it with a differently-typed
-      // occupant) between this operation's capture and the one attempt the frozen name-based
-      // engine makes here: no refresh, no retry, no new UUID-conditional-delete contract. The key
-      // no longer names a view, which is exactly the existing typed NO_SUCH_VIEW contract
-      // findById already uses for the same observation, not a server fault.
+      // occupant) between this operation's capture and the one name-based attempt made here: no
+      // refresh, no retry, no new UUID-conditional-delete contract. The key no longer names a
+      // view, which is exactly the existing typed NO_SUCH_VIEW contract findById already uses for
+      // the same observation, not a server fault.
       throw noSuchView(databaseId, viewId);
     }
   }
@@ -265,8 +272,8 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
   }
 
   private ViewDto toPointerDto(HouseTable row) {
-    ViewMetadata metadata = readViewMetadata(row);
-    String creator = metadata.properties().get(getCanonicalFieldName("tableCreator"));
+    Map<String, String> properties = readViewMetadata(row);
+    String creator = properties.get(getCanonicalFieldName("tableCreator"));
     if (StringUtils.isBlank(creator)) {
       throw new IllegalStateException(
           "Corrupt view metadata for "
@@ -282,17 +289,17 @@ public class OpenHouseInternalViewRepositoryImpl implements OpenHouseInternalVie
         .viewVersion(row.getTableLocation())
         .viewCreator(creator)
         .creationTime(row.getCreationTime())
-        .lastModifiedTime(readLongProperty(metadata, "lastModifiedTime"))
+        .lastModifiedTime(readLongProperty(properties, "lastModifiedTime"))
         .build();
   }
 
-  private ViewMetadata readViewMetadata(HouseTable row) {
+  private Map<String, String> readViewMetadata(HouseTable row) {
     FileIO fileIO = fileIOManager.getFileIO(storageType.fromString(row.getStorageType()));
-    return viewMetadataCodec.read(fileIO.newInputFile(row.getTableLocation()));
+    return viewMetadataCodec.read(fileIO.newInputFile(row.getTableLocation())).properties();
   }
 
-  private static long readLongProperty(ViewMetadata metadata, String propertyName) {
-    String value = metadata.properties().get(getCanonicalFieldName(propertyName));
+  private static long readLongProperty(Map<String, String> properties, String propertyName) {
+    String value = properties.get(getCanonicalFieldName(propertyName));
     return value == null ? 0L : Long.parseLong(value);
   }
 

@@ -11,8 +11,10 @@ import org.springframework.data.domain.Pageable;
  * without reusing its implementation: no snapshots, partition specs, sort orders, or retention
  * semantics. Owns the single pre-admission snapshot capture ({@link #prepareWrite}/{@link
  * #prepareDelete}), UUID/storage/root allocation (create only, after admission), the {@code
- * ViewCommitEngine} call, and result mapping. Surfaces engine and HTS exceptions unwrapped: typed,
- * cause-preserving translation happens once, at the {@code ViewsServiceImpl} boundary.
+ * ViewCommitEngine} CREATE/REPLACE call, direct typed HTS lookup/list/delete, and result mapping.
+ * Surfaces engine and HTS exceptions unwrapped, except that an ambiguous direct delete is wrapped
+ * as a commit-state-unknown exception with its original cause: typed, cause-preserving translation
+ * happens once, at the {@code ViewsServiceImpl} boundary.
  */
 public interface OpenHouseInternalViewRepository {
 
@@ -26,7 +28,8 @@ public interface OpenHouseInternalViewRepository {
   PreparedViewOperation prepareDelete(String databaseId, String viewId);
 
   /**
-   * Pointer-only read, served from the HTS row with no metadata-file parse.
+   * Pointer-only response served from the HTS row, with the creator and last-modified time read
+   * from the metadata file at the captured HTS pointer.
    *
    * @throws com.linkedin.openhouse.tables.exception.ViewApiException with {@link
    *     com.linkedin.openhouse.tables.exception.ViewErrorCode#NO_SUCH_VIEW} if the key is absent or

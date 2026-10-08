@@ -4,7 +4,6 @@ import com.linkedin.openhouse.cluster.configs.ClusterProperties;
 import com.linkedin.openhouse.common.api.validator.ValidatorConstants;
 import com.linkedin.openhouse.internal.catalog.repository.exception.HouseTableNotFoundException;
 import com.linkedin.openhouse.internal.catalog.repository.exception.HouseTableRepositoryStateUnknownException;
-import com.linkedin.openhouse.internal.catalog.view.ViewNameOccupiedException;
 import com.linkedin.openhouse.tables.api.spec.v0.request.CreateUpdateViewRequestBody;
 import com.linkedin.openhouse.tables.audit.ViewOperationAuditEmitter;
 import com.linkedin.openhouse.tables.authorization.Privileges;
@@ -234,10 +233,6 @@ public class ViewsServiceImpl implements ViewsService {
   private static ViewApiException translateWriteFailure(RuntimeException e) {
     if (e instanceof AlreadyExistsException) {
       return new ViewApiException(ViewErrorCode.VIEW_ALREADY_EXISTS, "View already exists", e);
-    }
-    if (e instanceof ViewNameOccupiedException) {
-      return new ViewApiException(
-          ViewErrorCode.NAME_ALREADY_EXISTS_AS_TABLE, "Name already exists as a table", e);
     }
     if (e instanceof CommitFailedException) {
       return new ViewApiException(
