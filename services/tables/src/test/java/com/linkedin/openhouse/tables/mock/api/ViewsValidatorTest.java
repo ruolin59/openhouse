@@ -660,6 +660,36 @@ public class ViewsValidatorTest {
             + " and policies is matched exactly.");
   }
 
+  /**
+   * The engine owns {@code replace.drop-dialect.allowed}: a caller-supplied value of any kind would
+   * otherwise reach the engine and fail there as a server fault. Matching is exact and
+   * case-sensitive, like the other reserved keys, and the value is never echoed.
+   */
+  @Test
+  public void validateRejectsEngineOwnedDropDialectPropertyCaseSensitively() {
+    for (String value : Arrays.asList("true", "false", "")) {
+      Map<String, String> dropDialect = new LinkedHashMap<>();
+      dropDialect.put("replace.drop-dialect.allowed", value);
+      // The exact message lists the key alone, so no value can be echoed.
+      assertRejected(
+          createOf(validCreateRequest().toBuilder().viewProperties(dropDialect).build()),
+          ViewErrorCode.INVALID_VIEW_DEFINITION,
+          "viewProperties : reserved keys are not allowed: replace.drop-dialect.allowed");
+      assertRejected(
+          updateOf(validUpdateRequest().toBuilder().viewProperties(dropDialect).build()),
+          ViewErrorCode.INVALID_VIEW_DEFINITION,
+          "viewProperties : reserved keys are not allowed: replace.drop-dialect.allowed");
+    }
+
+    Map<String, String> userOwned = new LinkedHashMap<>();
+    userOwned.put("Replace.Drop-Dialect.Allowed", "true");
+    userOwned.put("replace.drop-dialect.allowed.note", "true");
+    userOwned.put("replace.drop-dialect", "true");
+    assertDoesNotThrow(
+        createOf(validCreateRequest().toBuilder().viewProperties(userOwned).build()),
+        "Only the exact engine key is reserved; case variants and neighbours stay user-owned.");
+  }
+
   @Test
   public void validateRejectsIllegalBaseVersionTokensPerVerb() {
     assertRejected(

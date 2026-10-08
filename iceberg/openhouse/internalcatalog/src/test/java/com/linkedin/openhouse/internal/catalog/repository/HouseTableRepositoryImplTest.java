@@ -42,6 +42,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -54,7 +56,10 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.util.AopTestUtils;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.util.ReflectionUtils;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
 
 /** As part of prerequisite of this test, bring up the /hts Springboot application. */
@@ -827,5 +832,104 @@ public class HouseTableRepositoryImplTest {
         () ->
             htsRepo.restoreTable(
                 HOUSE_TABLE.getDatabaseId(), HOUSE_TABLE.getTableId(), System.currentTimeMillis()));
+  }
+
+  // --- Neutral enumeration (findAll): actual HTTP 5xx is a typed, retried read outage ---
+
+  /**
+   * Exact request counts hold only because this adapter is fresh (the context is dirtied after each
+   * method) and findAll is the first caller to initialize its retry template; the guard proves no
+   * setup call got there first.
+   */
+  private void assertRetryTemplateUninitialized() {
+    // Typed as Object, so the instance (not the Class) overload of getField is chosen.
+    Object adapter = AopTestUtils.getUltimateTargetObject(htsRepo);
+    Assertions.assertNull(
+        ReflectionTestUtils.getField(adapter, "retryTemplate"),
+        "the enumeration must be the first caller to initialize the retry template");
+  }
+
+  private static MockResponse status(int code) {
+    return new MockResponse()
+        .setResponseCode(code)
+        .setBody("")
+        .addHeader("Content-Type", "application/json");
+  }
+
+  /** Requests actually received for this method, each of which must be the enumeration GET. */
+  private static int enumerationRequestsReceived() throws InterruptedException {
+    int received = 0;
+    RecordedRequest request;
+    while ((request = mockHtsServer.takeRequest(1, TimeUnit.SECONDS)) != null) {
+      Assertions.assertEquals("GET", request.getMethod());
+      assertThat(request.getPath()).startsWith("/hts/tables/query");
+      received++;
+    }
+    return received;
+  }
+
+  @Test
+  public void findAllRetriesATransientServerErrorAndThenSucceeds() throws InterruptedException {
+    assertRetryTemplateUninitialized();
+    mockHtsServer.enqueue(status(503));
+    GetAllEntityResponseBodyUserTable listResponse = new GetAllEntityResponseBodyUserTable();
+    Field resultField =
+        ReflectionUtils.findField(GetAllEntityResponseBodyUserTable.class, "results");
+    Assertions.assertNotNull(resultField);
+    ReflectionUtils.makeAccessible(resultField);
+    ReflectionUtils.setField(
+        resultField,
+        listResponse,
+        Collections.singletonList(houseTableMapper.toUserTableWithDatabaseId(HOUSE_TABLE)));
+    mockHtsServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .setBody((new Gson()).toJson(listResponse))
+            .addHeader("Content-Type", "application/json"));
+
+    Iterable<HouseTable> tables =
+        Assertions.assertDoesNotThrow(
+            () -> htsRepo.findAll(), "a transient enumeration 503 must be retried");
+
+    assertThat(tables).hasSize(1);
+    Assertions.assertEquals(2, enumerationRequestsReceived());
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {500, 502, 503, 504})
+  public void findAllExhaustsRetriesOnServerErrorsAsTypedStateUnknown(int code)
+      throws InterruptedException {
+    assertRetryTemplateUninitialized();
+    for (int i = 0; i < HtsRetryUtils.MAX_RETRY_ATTEMPT; i++) {
+      mockHtsServer.enqueue(status(code));
+    }
+
+    HouseTableRepositoryStateUnknownException thrown =
+        Assertions.assertThrows(
+            HouseTableRepositoryStateUnknownException.class, () -> htsRepo.findAll());
+
+    Assertions.assertTrue(
+        thrown.getCause() instanceof WebClientResponseException,
+        "the original HTTP failure is the cause: " + thrown.getCause());
+    Assertions.assertEquals(
+        code, ((WebClientResponseException) thrown.getCause()).getRawStatusCode());
+    Assertions.assertEquals(HtsRetryUtils.MAX_RETRY_ATTEMPT, enumerationRequestsReceived());
+  }
+
+  /**
+   * A 4xx is not an outage: it stays the raw HTTP failure after one request. A 404 in particular
+   * must not become HouseTableNotFoundException, which a view read would call NO_SUCH_VIEW.
+   */
+  @ParameterizedTest
+  @ValueSource(ints = {400, 403, 404, 429})
+  public void findAllLeavesClientErrorsRawAndUnretried(int code) throws InterruptedException {
+    assertRetryTemplateUninitialized();
+    mockHtsServer.enqueue(status(code));
+
+    WebClientResponseException thrown =
+        Assertions.assertThrows(WebClientResponseException.class, () -> htsRepo.findAll());
+
+    Assertions.assertEquals(code, thrown.getRawStatusCode());
+    Assertions.assertEquals(1, enumerationRequestsReceived());
   }
 }
