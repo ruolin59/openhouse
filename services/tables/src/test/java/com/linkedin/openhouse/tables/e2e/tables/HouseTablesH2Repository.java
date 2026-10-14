@@ -1,4 +1,4 @@
-package com.linkedin.openhouse.tables.e2e.h2;
+package com.linkedin.openhouse.tables.e2e.tables;
 
 import static com.linkedin.openhouse.internal.catalog.CatalogConstants.ENTITY_TYPE_TABLE;
 import static com.linkedin.openhouse.internal.catalog.CatalogConstants.ENTITY_TYPE_VIEW;
@@ -165,18 +165,25 @@ public interface HouseTablesH2Repository extends HouseTableRepository {
   }
 
   @Override
-  default void deleteById(HouseTablePrimaryKey houseTablePrimaryKey, boolean isSoftDelete) {
+  default void deleteById(HouseTablePrimaryKey houseTablePrimaryKey, boolean purge) {
     // For the purpose of testing, move the table to a soft-deleted map instead of deleting it.
     // If HTS is enabled it will write to a different table
     if (this.findById(houseTablePrimaryKey).isPresent()) {
-      if (isSoftDelete) {
+      if (!purge) {
         SoftDeletedTablePrimaryKey key =
             SoftDeletedTablePrimaryKey.builder()
                 .databaseId(houseTablePrimaryKey.getDatabaseId())
                 .tableId(houseTablePrimaryKey.getTableId())
                 .deletedAtMs(System.currentTimeMillis())
                 .build();
-        softDeletedTables.put(key, this.findById(houseTablePrimaryKey).get());
+        softDeletedTables.put(
+            key,
+            this.findById(houseTablePrimaryKey)
+                .get()
+                .toBuilder()
+                .deletedAtMs(key.getDeletedAtMs())
+                .purgeAfterMs(key.getDeletedAtMs() + 86400000)
+                .build());
       }
       deleteById(houseTablePrimaryKey);
     }
