@@ -11,8 +11,10 @@ import com.linkedin.openhouse.tables.audit.ViewRequestPayloadRedactor;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.servlet.HandlerMapping;
 
 /**
  * Unit coverage of {@link ViewRequestPayloadRedactor}. The controller-level proof that the redactor
@@ -67,6 +69,7 @@ public class ViewRequestPayloadRedactorTest {
     JsonElement payload =
         JsonParser.parseString(
             "{\"viewId\": \"my_view\", \"databaseId\": \"my_database\","
+                + " \"baseMetadataLocation\": \"file:/secret/base-token.metadata.json\","
                 + " \"schema\": \"secret schema\","
                 + " \"representations\": ["
                 + "{\"type\": \"sql\", \"sql\": \"secret sql one\", \"dialect\": \"spark\"},"
@@ -77,6 +80,10 @@ public class ViewRequestPayloadRedactorTest {
 
     Assertions.assertEquals(
         ServiceAuditPayloadRedactor.REDACTED_VALUE, redacted.get("schema").getAsString());
+    Assertions.assertEquals(
+        ServiceAuditPayloadRedactor.REDACTED_VALUE,
+        redacted.get("baseMetadataLocation").getAsString(),
+        "The write CAS token is as sensitive as schema and SQL and must not be retained.");
     JsonArray representations = redacted.getAsJsonArray("representations");
     for (JsonElement representation : representations) {
       Assertions.assertEquals(
@@ -85,6 +92,7 @@ public class ViewRequestPayloadRedactorTest {
           "Every representation is redacted, not only the first.");
     }
     Assertions.assertFalse(redacted.toString().contains("secret"));
+    Assertions.assertFalse(redacted.toString().contains("base-token"));
 
     // Identifiers and dialect metadata survive.
     Assertions.assertEquals("my_view", redacted.get("viewId").getAsString());
@@ -115,12 +123,16 @@ public class ViewRequestPayloadRedactorTest {
    * reaches the redactor, because the aspect audits whatever the caller sent.
    */
   @Test
-  public void toleratesPayloadsThatCarryNoViewDefinition() {
+  public void preservesNullAndRedactsNonObjectRootPayloads() {
     Assertions.assertNull(redactor.redact(null));
     Assertions.assertEquals(JsonNull.INSTANCE, redactor.redact(JsonNull.INSTANCE));
     Assertions.assertEquals(
-        new JsonPrimitive("not an object"), redactor.redact(new JsonPrimitive("not an object")));
-    Assertions.assertEquals(new JsonArray(), redactor.redact(new JsonArray()));
+        new JsonPrimitive(ServiceAuditPayloadRedactor.REDACTED_VALUE),
+        redactor.redact(new JsonPrimitive("SELECT SQL_SECRET")));
+    Assertions.assertEquals(
+        new JsonPrimitive(ServiceAuditPayloadRedactor.REDACTED_VALUE),
+        redactor.redact(
+            JsonParser.parseString("[\"SQL_SECRET\", {\"schema\":\"SCHEMA_SECRET\"}]")));
 
     JsonObject withoutDefinition = new JsonObject();
     withoutDefinition.addProperty("viewId", "my_view");
@@ -161,5 +173,118 @@ public class ViewRequestPayloadRedactorTest {
         ServiceAuditPayloadRedactor.REDACTED_VALUE,
         redacted.get("schema").getAsString(),
         "A malformed representations field must not stop the schema from being redacted.");
+  }
+
+  /**
+   * Jackson rejects these representation shapes, but the request audit still parses the body, so a
+   * sensitive representations subtree must not survive in any shape. Failing closed (throwing, so
+   * the audit drops the payload) is equally acceptable.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "{\"representations\": {\"sql\": \"SQL_SECRET\"}, \"schema\": \"SCHEMA_SECRET\"}",
+        "{\"representations\": {\"type\": \"sql\", \"sql\": \"SQL_SECRET\"},"
+            + " \"schema\": \"SCHEMA_SECRET\", \"viewId\": \"v\"}",
+        "{\"representations\": \"SQL_SECRET\", \"schema\": \"SCHEMA_SECRET\"}"
+      })
+  public void malformedRepresentationsShapesNeverRetainSql(String body) {
+    JsonElement redacted;
+    try {
+      redacted = redactor.redact(JsonParser.parseString(body));
+    } catch (RuntimeException failClosed) {
+      return;
+    }
+
+    String rendered = redacted.toString();
+    Assertions.assertFalse(rendered.contains("SQL_SECRET"), rendered);
+    Assertions.assertFalse(rendered.contains("SCHEMA_SECRET"), rendered);
+  }
+
+  /**
+   * Inside a representations array, a malformed element that is not a representation object (a bare
+   * SQL string, or SQL nested in another array) must not carry SQL into the audit. Failing closed
+   * (throwing, so the audit drops the payload) is equally acceptable.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "{\"representations\": [\"SELECT SQL_ARRAY_SECRET\"], \"schema\": \"SCHEMA_SECRET\"}",
+        "{\"representations\": [[\"SELECT SQL_ARRAY_SECRET\"]], \"schema\": \"SCHEMA_SECRET\"}",
+        "{\"representations\": [[{\"sql\": \"SELECT SQL_ARRAY_SECRET\"}]],"
+            + " \"schema\": \"SCHEMA_SECRET\"}",
+        "{\"representations\": [{\"type\": \"sql\", \"sql\": \"ok\"},"
+            + " \"SELECT SQL_ARRAY_SECRET\"], \"schema\": \"SCHEMA_SECRET\"}"
+      })
+  public void malformedRepresentationArrayElementsNeverRetainSql(String body) {
+    JsonElement redacted;
+    try {
+      redacted = redactor.redact(JsonParser.parseString(body));
+    } catch (RuntimeException failClosed) {
+      return;
+    }
+
+    String rendered = redacted.toString();
+    Assertions.assertFalse(rendered.contains("SQL_ARRAY_SECRET"), rendered);
+    Assertions.assertFalse(rendered.contains("SCHEMA_SECRET"), rendered);
+  }
+
+  // --- Scope: follows the route MVC resolved, else the normalized application lookup path ---
+
+  private static final String COLLECTION_TEMPLATE = "/v1/databases/{databaseId}/views";
+  private static final String ITEM_TEMPLATE = COLLECTION_TEMPLATE + "/{viewId}";
+
+  private static MockHttpServletRequest request(String contextPath, String uri, String pattern) {
+    MockHttpServletRequest request = new MockHttpServletRequest("POST", uri);
+    request.setContextPath(contextPath);
+    if (pattern != null) {
+      request.setAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE, pattern);
+    }
+    return request;
+  }
+
+  /** The resolved collection or item template, with or without MVC's slash, over an alias. */
+  @ParameterizedTest
+  @CsvSource({
+    "/v1/databases/db/views/," + COLLECTION_TEMPLATE,
+    "/v1/databases/db/views/," + COLLECTION_TEMPLATE + "/",
+    "/v1/databases/db/views;variant=x," + COLLECTION_TEMPLATE,
+    "/v1/databases/db/views/v/," + ITEM_TEMPLATE,
+    "/v1/databases/db/views/v/," + ITEM_TEMPLATE + "/",
+    "/v1/databases/db/views/v;variant=x," + ITEM_TEMPLATE
+  })
+  public void appliesToTheResolvedViewRoutesWhateverAliasWasSent(String uri, String pattern) {
+    Assertions.assertTrue(redactor.appliesTo(request("", uri, pattern)), uri + " -> " + pattern);
+  }
+
+  /** A resolved non-view route is authoritative, even over a view-looking raw path. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "/v1/databases/{databaseId}/tables",
+        "/v1/databases/{databaseId}/tables/{tableId}",
+        "/v2/databases/{databaseId}/views"
+      })
+  public void aResolvedNonViewRouteIsAuthoritative(String pattern) {
+    Assertions.assertFalse(
+        redactor.appliesTo(request("", "/v1/databases/db/views/v", pattern)), pattern);
+  }
+
+  /** With no resolved route, the decoded application lookup path decides. */
+  @ParameterizedTest
+  @CsvSource({
+    "'',/v1/databases/db/views/",
+    "'',/v1/databases/db/views;variant=x",
+    "'',/v1/databases/db/views/v/",
+    "'',/v1/databases/db/views/v;variant=x",
+    "/ctx,/ctx/v1/databases/db/views/v"
+  })
+  public void withoutAResolvedRouteTheNormalizedLookupPathDecides(String contextPath, String uri) {
+    Assertions.assertTrue(redactor.appliesTo(request(contextPath, uri, null)), uri);
+  }
+
+  @Test
+  public void aRequestWithoutAUriIsDeclined() {
+    Assertions.assertFalse(redactor.appliesTo(new MockHttpServletRequest()));
   }
 }

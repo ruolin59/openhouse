@@ -58,6 +58,14 @@ public class OpenHouseViewsApiValidator implements ViewsApiValidator {
    */
   private static final String POLICIES_PROPERTY_KEY = "policies";
 
+  /**
+   * Exact engine-owned property key, the same literal as Iceberg's {@code
+   * ViewProperties.REPLACE_DROP_DIALECT_ALLOWED}. The commit engine rejects it from any caller
+   * before writing, so a caller-supplied value of any kind is rejected here as client input rather
+   * than surfacing as a server fault.
+   */
+  private static final String DROP_DIALECT_ALLOWED_PROPERTY_KEY = "replace.drop-dialect.allowed";
+
   @Autowired private Validator validator;
 
   @Autowired private ClusterProperties clusterProperties;
@@ -412,10 +420,11 @@ public class OpenHouseViewsApiValidator implements ViewsApiValidator {
   }
 
   /**
-   * View properties are user-owned, with two exceptions carved out for the server: the {@code
+   * View properties are user-owned, with exceptions carved out for the server: the {@code
    * openhouse.} namespace, whose canonical case-sensitive predicate is reused from the internal
-   * catalog, and the exact key {@code policies}. Case sensitivity is deliberate and inherited: a
-   * user property such as {@code OpenHouse.myTeam} stays legal.
+   * catalog, the exact key {@code policies}, and the exact engine-owned key {@code
+   * replace.drop-dialect.allowed}. Case sensitivity is deliberate and inherited: a user property
+   * such as {@code OpenHouse.myTeam} stays legal.
    *
    * <p>Property keys are user-authored identifiers rather than payload text, so listing the
    * offending keys is intentional and does not breach the SQL/schema/token redaction invariant.
@@ -438,7 +447,9 @@ public class OpenHouseViewsApiValidator implements ViewsApiValidator {
       if (property.getValue() == null) {
         nullValueKeys.add(key);
       }
-      if (HouseTableSerdeUtils.IS_OH_PREFIXED.test(key) || POLICIES_PROPERTY_KEY.equals(key)) {
+      if (HouseTableSerdeUtils.IS_OH_PREFIXED.test(key)
+          || POLICIES_PROPERTY_KEY.equals(key)
+          || DROP_DIALECT_ALLOWED_PROPERTY_KEY.equals(key)) {
         reservedKeys.add(key);
       }
     }

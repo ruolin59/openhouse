@@ -16,6 +16,8 @@ public class ViewCommitResult {
 
   private final String viewUuid;
 
+  private final String viewCreator;
+
   private final long lastModifiedTime;
 
   private final boolean created;
