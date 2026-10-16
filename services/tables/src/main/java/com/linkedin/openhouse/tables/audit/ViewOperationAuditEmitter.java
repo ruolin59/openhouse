@@ -43,8 +43,8 @@ public class ViewOperationAuditEmitter {
   private final AuditHandler<ViewAuditEvent> auditHandler;
 
   @Autowired
-  public ViewOperationAuditEmitter(AuditHandler<ViewAuditEvent> auditHandler) {
-    this.auditHandler = auditHandler;
+  public ViewOperationAuditEmitter(AuditHandler<ViewAuditEvent> viewAuditHandler) {
+    this.auditHandler = viewAuditHandler;
   }
 
   /**
