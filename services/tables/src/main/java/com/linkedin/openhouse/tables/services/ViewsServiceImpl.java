@@ -23,6 +23,7 @@ import com.linkedin.openhouse.internal.catalog.view.model.ViewCommitResult;
 import com.linkedin.openhouse.internal.catalog.view.model.ViewPointer;
 import com.linkedin.openhouse.tables.api.spec.v0.request.CreateUpdateViewRequestBody;
 import com.linkedin.openhouse.tables.api.spec.v0.request.components.ViewRepresentation;
+import com.linkedin.openhouse.tables.audit.ViewOperationAuditEmitter;
 import com.linkedin.openhouse.tables.authorization.Privileges;
 import com.linkedin.openhouse.tables.exception.ViewApiException;
 import com.linkedin.openhouse.tables.exception.ViewErrorCode;
@@ -65,10 +66,10 @@ import org.springframework.stereotype.Component;
  *
  * POST / PUT: gate -> database existence -> prepared capture -> authorization
  *             -> resource type / base-version -> allocate (create only)
- *             -> commit
+ *             -> commit -> audit
  *
  * DELETE:     gate -> database existence -> authorization -> prepared capture
- *             -> delete
+ *             -> delete -> audit
  * </pre>
  *
  * Captures, reads, lists and deletes use the typed {@link HouseTableRepository}; a create selects
@@ -103,6 +104,8 @@ public class ViewsServiceImpl implements ViewsService {
   @Autowired private AuthorizationUtils authorizationUtils;
 
   @Autowired private ViewWritePrivilegeMapper privilegeMapper;
+
+  @Autowired private ViewOperationAuditEmitter viewOperationAuditEmitter;
 
   @Autowired private ClusterProperties clusterProperties;
 
@@ -155,13 +158,22 @@ public class ViewsServiceImpl implements ViewsService {
       CreateUpdateViewRequestBody requestBody, String actingPrincipal, boolean failOnExist) {
     String databaseId = requestBody.getDatabaseId();
     String viewId = requestBody.getViewId();
+    // #839 relocated the source dialect from a top-level field to a reserved view property.
+    Map<String, String> requestProperties = requestBody.getViewProperties();
+    String sourceDialect =
+        requestProperties == null
+            ? null
+            : requestProperties.get(ReservedViewProperties.SOURCE_DIALECT);
+    PreparedViewOperation prepared = null;
+    ViewCommitResult result;
+    ViewDto dto;
     try {
       requireEnabled(databaseId);
       requireDatabasesExist(databaseId, requestBody.getDefaultNamespace());
 
       Optional<HouseTable> occupant =
           houseTableRepository.findEntityById(primaryKey(databaseId, viewId));
-      PreparedViewOperation prepared =
+      prepared =
           occupant
               .map(
                   row ->
@@ -189,17 +201,22 @@ public class ViewsServiceImpl implements ViewsService {
             databaseId, viewId, requestBody.getBaseMetadataLocation(), prepared, viewAlreadyExists);
       }
 
-      ViewCommitResult result =
-          commitView(requestBody, prepared, actingPrincipal, !viewAlreadyExists);
-      ViewDto dto = toCommittedDto(databaseId, viewId, result);
-      return Pair.of(withClusterId(dto), result.isCreated());
+      result = commitView(requestBody, prepared, actingPrincipal, !viewAlreadyExists);
+      dto = toCommittedDto(databaseId, viewId, result);
     } catch (RuntimeException e) {
-      throw ViewFailureTranslator.translateWriteFailureTo(e);
+      throw handleWriteFailure(e, prepared, databaseId, viewId, actingPrincipal, sourceDialect);
     }
+    // Outside the try: once commit/deleteById returns, SUCCESS is terminal and a subsequent audit-
+    // delivery failure must never re-enter the FAILED branch above or retry the already-
+    // acknowledged mutation.
+    viewOperationAuditEmitter.emitSuccess(
+        prepared, dto, result.getViewUuid(), actingPrincipal, sourceDialect);
+    return Pair.of(withClusterId(dto), result.isCreated());
   }
 
   @Override
   public void deleteView(String databaseId, String viewId, String actingPrincipal) {
+    PreparedViewOperation prepared = null;
     try {
       requireEnabled(databaseId);
       requireDatabasesExist(databaseId, null);
@@ -207,7 +224,7 @@ public class ViewsServiceImpl implements ViewsService {
       Privileges privilege = privilegeMapper.forDelete();
       authorizationUtils.checkDatabasePrivilege(databaseId, actingPrincipal, privilege);
 
-      PreparedViewOperation prepared =
+      prepared =
           houseTableRepository
               .findViewById(primaryKey(databaseId, viewId))
               .map(PreparedViewOperation::view)
@@ -217,8 +234,9 @@ public class ViewsServiceImpl implements ViewsService {
       }
       deleteCapturedView(databaseId, viewId);
     } catch (RuntimeException e) {
-      throw ViewFailureTranslator.translateWriteFailureTo(e);
+      throw handleWriteFailure(e, prepared, databaseId, viewId, actingPrincipal, null);
     }
+    viewOperationAuditEmitter.emitSuccess(prepared, null, null, actingPrincipal, null);
   }
 
   private void deleteCapturedView(String databaseId, String viewId) {
@@ -313,6 +331,31 @@ public class ViewsServiceImpl implements ViewsService {
           ViewErrorCode.CONCURRENT_VIEW_MODIFICATION,
           "Concurrent view modification: " + databaseId + "." + viewId);
     }
+  }
+
+  /**
+   * Write-failure dispatch: an ambiguous commit emits one UNKNOWN audit event; any other failure
+   * emits one FAILED audit event. Translation of the failure into the API exception stays with
+   * {@link ViewFailureTranslator}, so audit emission never changes the error contract.
+   */
+  private RuntimeException handleWriteFailure(
+      RuntimeException e,
+      PreparedViewOperation prepared,
+      String databaseId,
+      String viewId,
+      String actingPrincipal,
+      String sourceDialect) {
+    // Null when the failure precedes any capture (gate, database check, delete authorization, or
+    // the capture itself): audit identity then falls back to the request's identifiers.
+    PreparedViewOperation preparedForAudit =
+        (prepared == null ? PreparedViewOperation.observedAbsence() : prepared)
+            .withRequestedIdentity(databaseId, viewId);
+    if (e instanceof CommitStateUnknownException) {
+      viewOperationAuditEmitter.emitUnknown(preparedForAudit, actingPrincipal, sourceDialect, e);
+    } else {
+      viewOperationAuditEmitter.emitFailed(preparedForAudit, actingPrincipal, sourceDialect);
+    }
+    return ViewFailureTranslator.translateWriteFailureTo(e);
   }
 
   private void requireEnabled(String databaseId) {
