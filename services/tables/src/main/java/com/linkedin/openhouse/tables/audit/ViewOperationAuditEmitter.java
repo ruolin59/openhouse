@@ -9,6 +9,7 @@ import com.linkedin.openhouse.tables.audit.model.ViewAuditEvent;
 import com.linkedin.openhouse.tables.model.ViewDto;
 import com.linkedin.openhouse.tables.services.PreparedViewOperation;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.stereotype.Component;
@@ -42,7 +43,19 @@ public class ViewOperationAuditEmitter {
 
   private final AuditHandler<ViewAuditEvent> auditHandler;
 
+  /**
+   * A deployment supplies its own {@link AuditHandler} for {@link ViewAuditEvent}; otherwise view
+   * operation events go to {@link DummyViewAuditHandler}. Following {@code
+   * tables.api.ApiConfig#readBridgeConfigResolver}, the default arrives through {@link
+   * ObjectProvider} rather than a competing OSS {@code @Component}, so a deployment bean cannot
+   * collide with it and the override does not depend on bean-name matching.
+   */
   @Autowired
+  public ViewOperationAuditEmitter(ObjectProvider<AuditHandler<ViewAuditEvent>> viewAuditHandler) {
+    this(viewAuditHandler.getIfAvailable(DummyViewAuditHandler::new));
+  }
+
+  /** Direct construction against an explicit handler, outside a Spring context. */
   public ViewOperationAuditEmitter(AuditHandler<ViewAuditEvent> viewAuditHandler) {
     this.auditHandler = viewAuditHandler;
   }

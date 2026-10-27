@@ -1,5 +1,6 @@
 package com.linkedin.openhouse.tables.mock.audit;
 
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
@@ -19,26 +20,27 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.test.util.ReflectionTestUtils;
 
 /**
- * Real Spring constructor injection of the operation-audit sink. The default handler is always
- * registered, so a deployment's conventionally named {@code viewAuditHandler} bean coexists with it
- * (neither is primary) and must be the one the emitter receives; without it, the default is used.
+ * Real Spring constructor injection of the operation-audit sink. The default handler is not a bean,
+ * so a deployment-supplied handler replaces it through {@code ObjectProvider} rather than competing
+ * with it, and the override does not depend on the bean being named {@code viewAuditHandler}.
  */
 public class ViewOperationAuditHandlerWiringTest {
 
   private final ApplicationContextRunner contextRunner =
-      new ApplicationContextRunner()
-          .withUserConfiguration(DummyViewAuditHandler.class, ViewOperationAuditEmitter.class);
+      new ApplicationContextRunner().withUserConfiguration(ViewOperationAuditEmitter.class);
 
   @Test
-  public void customViewAuditHandlerCoexistingWithTheDefaultReceivesOperationEvents() {
+  public void aDeploymentViewAuditHandlerReplacesTheDefaultWhateverTheBeanIsNamed() {
     contextRunner
         .withUserConfiguration(CustomViewAuditHandlerConfig.class)
         .run(
             context -> {
-              assertNull(context.getStartupFailure());
+              assertNull(
+                  context.getStartupFailure(),
+                  "a deployment handler must not collide with an OSS default bean");
               @SuppressWarnings("unchecked")
               AuditHandler<ViewAuditEvent> custom =
-                  (AuditHandler<ViewAuditEvent>) context.getBean("viewAuditHandler");
+                  (AuditHandler<ViewAuditEvent>) context.getBean("someDeploymentAuditSink");
               ViewOperationAuditEmitter emitter = context.getBean(ViewOperationAuditEmitter.class);
               assertSame(custom, ReflectionTestUtils.getField(emitter, "auditHandler"));
 
@@ -53,8 +55,8 @@ public class ViewOperationAuditHandlerWiringTest {
     contextRunner.run(
         context -> {
           assertNull(context.getStartupFailure());
-          assertSame(
-              context.getBean(DummyViewAuditHandler.class),
+          assertInstanceOf(
+              DummyViewAuditHandler.class,
               ReflectionTestUtils.getField(
                   context.getBean(ViewOperationAuditEmitter.class), "auditHandler"));
         });
@@ -64,7 +66,7 @@ public class ViewOperationAuditHandlerWiringTest {
   static class CustomViewAuditHandlerConfig {
     @Bean
     @SuppressWarnings("unchecked")
-    AuditHandler<ViewAuditEvent> viewAuditHandler() {
+    AuditHandler<ViewAuditEvent> someDeploymentAuditSink() {
       return mock(AuditHandler.class);
     }
   }
